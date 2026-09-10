@@ -63,3 +63,30 @@
 4. 侧边栏切「重排方式 / top_k」→ 重新提问，确认检索可视化变化。
 5. 点「运行评测」→ 右侧出现 `Eval_Report_*.md`，展示 A-B 对比表。
 6. `/docs` 能打开，`/health` 返回模型连通状态。
+
+---
+
+## 五、系统整合与故障排查（软硬一体视角）
+
+> 当被问到「你的项目整体怎么搭、前后端和 Agent 怎么连、本机踩了什么坑」时，用这组。前四节偏 Agent/RAG 内部，本节偏「软件 + Agent 协同」与运维实操。
+
+### Q：为什么 Agent 不嵌进 Java 后端，而是独立 Python 服务 + 薄网关？
+> 技术栈与迭代节奏不同：Agent 是 LangGraph/FastAPI/RAG，后端是 Spring Boot 3.2.5 + Vue3，各自演进互不污染。Java 只做它擅长的「存、管、看」（账号/JD/简历/归档/站点），Agent 的 7 个能力一律不重写。代价是多一个服务编排（先起 :8000 再起 :8080），换来两侧可独立部署、测试。
+
+### Q：薄网关除了转发还做了什么？为什么只做这一件？
+> 唯一加工点是「装配用户画像」：`AgentContextService` 按登录用户把「所选岗位 JD + 关联简历正文」拼成 `user_context`，注入每轮 `/chat`、`/chat/stream`。其余零加工、Agent 代码零改动。这样 Agent 才能结合用户背景作答，而 Java 不背负任何 GenAI 逻辑，避免能力重复实现、职责纠缠。
+
+### Q：/api/job-sites 之前为什么 30s 超时？怎么定位修的？
+> 前端报 `timeout of 30000ms exceeded`，但接口逻辑很轻。`jstack` 抓到请求线程卡在**日志写出**——`com.jobseeker` 开 DEBUG 后 MyBatis 每条 SQL 打日志，控制台 appender 同步阻塞，高并发下线程被锁。修法：① `logback-spring.xml` 改 `AsyncAppender`（`neverBlock=true`），日志写出不阻塞业务线程；② `application.yml` 把 `com.jobseeker` 从 DEBUG 降 INFO。前端再加 8s 请求级超时 + 加载/失败重试三态，避免把「超时」误报成「无站点」。
+
+### Q：用户「岗位/简历」背景怎么进 Agent？历史长了画像丢不丢？
+> 前端在「AI 助手」页选岗位 + 关联简历 → 网关校验归属后取 JD/简历截断拼 `user_context` → 随请求发送。Agent 侧 `SessionManager` 每轮把 `user_context` 前置为 `SystemMessage`，且**历史裁剪后画像不丢**（画像独立于聊天记录、每轮重注入）。`user_context` 为空时行为与旧版一致。
+
+### Q：流式输出怎么落地？为什么不在容器外先渲染？
+> 链路：模型 `llm_stream` → `SessionManager.start_stream/step_stream` → SSE `/chat/stream`。关键：提交输入只「入队」，真正生成放在对话容器内部执行，token 直接落在助手气泡里，不会先渲染到容器外、结束再跳进消息列表。流式中途失败给友好提示而非抛栈；完整回复流结束才入栈，避免半截回答进下一轮上下文。
+
+### Q：Agent 接口为什么没有 /api 前缀？调用方注意什么？
+> 真实路径是 `/chat`、`/knowledge`、`/sessions`（旧文档写 `/api/chat` 是错的，已修正）。网关注发就是无前缀路径；`chat/knowledge/sessions` 三组带 `X-API-Key` 鉴权（`API_KEY` 空时关闭）。Agent 必须先于后端启动（:8000），否则网关注入 `user_context` 时连不上。
+
+### Q：本机 D: 盘为什么导致 Vite 504、Maven 编译失败？怎么绕？
+> 本机安全过滤驱动**全局禁止 D: 盘文件重命名（MoveFile）**。Vite 预构建把 `deps_temp_*` 重命名为 `deps` 被拦 → 持续 504；Maven `resources-plugin` 用「临时文件 + rename」原子拷贝被拦 → `AccessDeniedException`，且 Safe-Delete 拒绝删 `target`。绕法：Vite `cacheDir` 指向 C: 盘；Maven 用 `-Dmaven.resources.skip=true` 或导 classpath 走 `java -cp` 启动；构建产物 `<build><directory>C:/jobseeker-target</directory>` 改到 C: 盘。
