@@ -221,6 +221,7 @@ tests/              # 18 个测试文件（test_api / test_graph_route / test_no
                    #   test_loaders / test_rerank / test_eval / test_session / test_storage /
                    #   test_hitl / test_telemetry / test_safety / test_cache / test_tools /
                    #   test_llm / test_embeddings / test_logging_setup / smoke_test）
+.github/workflows/ci.yml   # CI 门禁（ruff lint / 跨版本 test 矩阵 / 锁文件校验 / 依赖漏洞扫描）
 ```
 
 ---
