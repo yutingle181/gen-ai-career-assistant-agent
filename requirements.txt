@@ -1,0 +1,39 @@
+# GenAI Career Assistant - 必选依赖（Windows / CPU / Python 3.10+ 可装，不含 torch）
+streamlit>=1.38
+fastapi>=0.115
+# Starlette 必须锁定在 1.0 之前的版本：1.x 会让 FastAPI 的 include_router 失效，
+# 导致所有业务路由（/chat、/knowledge、/sessions 等）丢失。
+starlette>=0.46.0,<1.0
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+sqlalchemy>=2.0
+pydantic>=2.7
+
+# LangChain / LangGraph 生态
+langchain>=0.3,<0.4
+langchain-core>=0.3,<0.4
+langchain-openai>=0.2
+langchain-community>=0.3,<0.4
+langchain-text-splitters>=0.3,<0.4
+langgraph>=0.2.48,<0.3
+
+# 联网搜索（免费无 Key）
+duckduckgo-search>=6.3,<8
+ddgs>=5.0
+
+# RAG：向量检索 + 稀疏检索
+faiss-cpu>=1.8
+numpy>=1.26,<2
+rank-bm25>=0.2.2
+
+# 文档解析
+pypdf>=4.3
+python-docx>=1.1
+beautifulsoup4>=4.12
+
+# 工程化：重试 / 缓存 / token 统计
+tenacity>=8.5
+diskcache>=5.6
+tiktoken>=0.7
+
+python-dotenv>=1.0

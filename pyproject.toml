@@ -1,0 +1,42 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]        # 保证 `import src` 不依赖调用方式
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["src"]
+# 纯样式常量（CSS/文案），无业务逻辑，不计入覆盖率口径
+omit = ["src/ui_style.py"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+]
+
+# Ruff：代码规范与静态检查（CI 与 pre-commit 统一使用本配置）
+# 显式固定规则集，避免 ruff 默认集随版本漂移导致本地 / CI 结果不一致。
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"          # 与 CI 矩阵最低版本一致（3.10 / 3.11 / 3.12）
+extend-exclude = [".venv", "venv", "data", "build", "dist", "*.ipynb"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle 错误
+  "W",   # pycodestyle 警告
+  "F",   # pyflakes：未使用导入 / 变量、重定义等真实问题
+  "I",   # isort：导入排序
+  "UP",  # pyupgrade：现代语法
+  "B",   # flake8-bugbear：常见缺陷（可变默认参数、盲捕获等）
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 提示词按语义成行，强行折行会改变 prompt 内容，故不限制行长
+"src/prompts/*" = ["E501"]
+# FastAPI 依赖注入惯用法：File(...) / Depends(...) 本就写在参数默认值里
+"src/api/routers/*" = ["B008"]

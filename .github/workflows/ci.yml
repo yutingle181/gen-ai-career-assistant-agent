@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# 测试均为离线安全设计，无需任何 API Key 即可跑通：
+# - RAG / Eval 用确定性伪 Embedding 替代云端接口
+# - /chat 等接口在无 Key 时降级为友好提示并返回 200
+# - 路由分类 / 冒烟走本地 graph，不调模型
+# 因此本流水线在公开仓库中也能稳定跑绿。
+
+jobs:
+  # 代码规范门禁：规则集固定在 pyproject.toml，不随 ruff 默认集漂移
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install ruff
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ruff check
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      # 一次跑完全部用例：API 与端到端冒烟已 pytest 化，不再以脚本方式单独运行。
+      # 覆盖率门槛 75%：当前实测约 82%，留约 7 个点余量应对 Python 版本差异。
+      - name: Run tests with coverage
+        run: python -m pytest --cov=src --cov-report=term-missing --cov-fail-under=75
+
+  # 依赖锁定校验：与上面的矩阵 job 互补。
+  # 矩阵验证「跨 Python 版本兼容性」（用宽松依赖），这里验证「锁定版本可安装且功能正常」，
+  # 避免 requirements.lock.txt 悄悄过时或某个锁定版本装不上而无人发现。
+  # 固定 3.12：锁文件按 3.12 编译，部分包（如 faiss-cpu）在 3.10 未必有对应 wheel。
+  lock-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.lock.txt
+
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.lock.txt
+
+      - name: Run tests with locked versions
+        run: python -m pytest tests/test_hitl.py tests/test_api.py tests/test_rag.py -q
+
+  # 依赖漏洞扫描（供应链安全）：只告警不阻断，
+  # 避免上游一发布 CVE 公告就卡住日常开发，同时保留可追溯的扫描记录。
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit locked dependencies
+        run: pip-audit -r requirements.lock.txt

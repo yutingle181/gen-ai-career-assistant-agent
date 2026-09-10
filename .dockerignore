@@ -1,0 +1,18 @@
+# 不进入镜像 / 构建上下文的内容
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# 数据目录运行时以 volume 挂载，不打包
+data/
+
+# 密钥不进镜像；运行时通过 compose env_file 注入
+.env
+
+# 版本控制与杂项
+.git/
+*.log
+.playwright-cli/
+.ipynb_checkpoints/
+agent_hackathon_genAI_career_assistant.ipynb
