@@ -1,0 +1,7 @@
+# OpenTelemetry 链路追踪（可选）
+# 启用：pip install -r requirements-otel.txt，并在运行时设置 OTEL_EXPORTER_OTLP_ENDPOINT
+# 未安装本文件依赖 / 未设置端点时，所有埋点为 no-op，业务零开销。
+opentelemetry-api>=1.20
+opentelemetry-sdk>=1.20
+opentelemetry-exporter-otlp-proto-http>=1.20
+opentelemetry-instrumentation-fastapi>=0.41

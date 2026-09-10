@@ -1,0 +1,6 @@
+# 可选依赖：仅在 EMBEDDING_PROVIDER=local 或需要本地重排时才安装
+# 注意：会拉入 torch（约 1-2GB），普通笔记本 / 无独显环境不建议安装
+# 如需本地 CPU 版 torch，请先单独执行：
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+sentence-transformers>=3.0

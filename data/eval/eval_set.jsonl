@@ -1,0 +1,20 @@
+{"question": "RAG 的完整链路中，为什么要做混合检索？BM25 和向量检索各自解决什么问题？", "golden_chunk_ids": ["genai_interview.md::p0::0::d36d401a"], "reference_answer": "做混合检索是为了结合不同检索方法的优势。BM25 擅长关键词匹配和精确匹配，能较好处理词汇匹配和语法结构；向量检索擅长语义匹配，能捕捉同义词、上下位关系等语义相似性。"}
+{"question": "如何评测一个 RAG 系统？Recall@K 和 MRR 分别怎么算？", "golden_chunk_ids": ["genai_interview.md::p0::0::d36d401a"], "reference_answer": "Recall@K 衡量前 K 个召回结果中包含相关文档的比例；MRR（Mean Reciprocal Rank）是所有查询的首个相关文档排名倒数的平均值。"}
+{"question": "多 Agent 协作时如何避免死循环？如何设置最大步数与超时？", "golden_chunk_ids": ["genai_interview.md::p0::1::8b6b59db"], "reference_answer": "可通过设置最大步数与超时来避免死循环。"}
+{"question": "LangGraph 相比裸 LangChain Agent 的优势是什么？", "golden_chunk_ids": ["genai_interview.md::p0::1::8b6b59db"], "reference_answer": "LangGraph 相比裸 LangChain Agent 具有优势。"}
+{"question": "AI应用工程师（Agent/RAG方向）岗位的职责中是否包含建立AI效果评测机制？", "golden_chunk_ids": ["jd_ai_engineer.md::p0::2::a642b11b"], "reference_answer": "是的，岗位职责第7条明确指出：建立回答准确率、召回率、幻觉率等AI效果评测机制。"}
+{"question": "该岗位要求候选人理解哪些核心技术概念？", "golden_chunk_ids": ["jd_ai_engineer.md::p0::2::a642b11b"], "reference_answer": "岗位任职要求第3条指出：理解RAG、Agent、Function Calling和结构化输出。"}
+{"question": "文档中提到的加分项有哪些？", "golden_chunk_ids": ["jd_ai_engineer.md::p0::3::25d3c2ea"], "reference_answer": "加分项包括：MCP、多 Agent 或工作流开发经验；模型微调、推理部署或 GPU 相关经验；熟悉 LangChain、LlamaIndex、Dify、FastGPT、Coze 等工具；做过企业知识库、智能客服或行业 AI 解决方案；有开源项目、技术文章或比赛经历。"}
+{"question": "文档中列出的关键词有哪些与检索技术相关？", "golden_chunk_ids": ["jd_ai_engineer.md::p0::3::25d3c2ea"], "reference_answer": "与检索技术相关的关键词包括：向量数据库、混合检索、重排。"}
+{"question": "PDF解析面临哪些主要难点？", "golden_chunk_ids": ["rag_practice.md::p0::4::e764deea"], "reference_answer": "PDF解析的难点包括：扫描件需要先做OCR；文本型PDF可能出现文字层错乱、表格串行、页眉页脚混入正文等问题。"}
+{"question": "数据清洗后丢弃比例超过多少时需要检查解析环节？", "golden_chunk_ids": ["rag_practice.md::p0::4::e764deea"], "reference_answer": "清洗后丢弃比例超过30%时需要检查解析环节是否有问题。"}
+{"question": "在中文场景下，常用的 Embedding 模型有哪些？", "golden_chunk_ids": ["rag_practice.md::p0::5::5384efe1"], "reference_answer": "中文场景常用 bge-m3、bge-large-zh、text-embedding-v3。"}
+{"question": "混合检索中首选的融合算法是什么？其公式和典型参数 k 是多少？", "golden_chunk_ids": ["rag_practice.md::p0::5::5384efe1"], "reference_answer": "混合检索中首选的融合算法是 RRF（Reciprocal Rank Fusion），公式为 score(d) = Σ 1 / (k + rank_i(d))，k 一般取 60。"}
+{"question": "重排阶段追求的目标是什么？", "golden_chunk_ids": ["rag_practice.md::p0::6::cf6d9f72"], "reference_answer": "重排阶段追求高准确率。"}
+{"question": "评测效果时，幻觉率通常如何计算？", "golden_chunk_ids": ["rag_practice.md::p0::6::cf6d9f72"], "reference_answer": "幻觉率通常用 LLM-as-judge：把回答拆成若干断言，逐条判断是否可由召回片段支撑。"}
+{"question": "该会话的生成时间是什么时候？", "golden_chunk_ids": ["Tutorial_20260907175847.md::p0::7::b9d0040e"], "reference_answer": "生成时间是2026-09-07 17:58:47。"}
+{"question": "该会话的模式是什么？", "golden_chunk_ids": ["Tutorial_20260907175847.md::p0::7::b9d0040e"], "reference_answer": "会话模式是教程生成（tutorial）。"}
+{"question": "该会话记录的生成时间是什么时候？", "golden_chunk_ids": ["Tutorial_20260907184917.md::p0::8::da9d6ae5"], "reference_answer": "生成时间是2026-09-07 18:49:17。"}
+{"question": "该会话的模式和检索配置中的融合策略分别是什么？", "golden_chunk_ids": ["Tutorial_20260907184917.md::p0::8::da9d6ae5"], "reference_answer": "会话模式是教程生成（tutorial），检索配置中的融合策略是rrf。"}
+{"question": "该会话的生成时间是什么时候？", "golden_chunk_ids": ["Tutorial_20260907185013.md::p0::9::8e1d810b"], "reference_answer": "生成时间是2026-09-07 18:50:13。"}
+{"question": "该会话的模式是什么？", "golden_chunk_ids": ["Tutorial_20260907185013.md::p0::9::8e1d810b"], "reference_answer": "会话模式是教程生成（tutorial）。"}

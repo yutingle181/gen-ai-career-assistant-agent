@@ -1,0 +1,22 @@
+# 本地提交前自动检查：pip install pre-commit && pre-commit install
+# 规则与 CI 完全一致（配置在 pyproject.toml），本地跑不过的提交在 CI 也跑不过。
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+    hooks:
+      - id: ruff
+        args: [--fix]   # 自动修复安全项（未使用导入、导入排序、旧式注解等）
+      # - id: ruff-format
+      #   暂不启用格式化：会对全仓库重排，产生大量与功能无关的 diff。
+      #   待稳定后可在单独一次提交中启用。
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: detect-private-key   # 兜底：防止 .env / 私钥被误提交

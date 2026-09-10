@@ -1,0 +1,64 @@
+# GenAI Career Assistant —— 容器编排（API + Web）
+#
+# 前置：本目录需存在 .env（可 `cp .env.example .env` 后填入模型 Key）。
+#       compose 通过 env_file 把 .env 注入容器，config.py 的 os.getenv 即可读取，
+#       与本地运行完全一致。
+# 启动：docker compose up --build
+# 停止：docker compose down
+# 仅起某服务：docker compose up api    /    docker compose up web
+#
+# 说明：Web 界面走本地 graph（直接 import src），不依赖 API 服务，二者可独立运行；
+#       二者共用数据卷持久化知识库索引与成本统计（app.db）。
+#
+# 非 root 与卷权限：
+#   镜像以 uid 10001 的 appuser 运行。data 用 Docker 管理的命名卷（首次挂载时会按
+#   镜像内目录属主初始化，权限自动正确）；Agent_output 用 bind mount 方便直接取用产物，
+#   Linux 宿主机若出现写入权限错误，执行一次：sudo chown -R 10001:10001 Agent_output
+
+services:
+  api:
+    build: .
+    image: genai-career-assistant:latest
+    command: python -m uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      # 知识库索引 / 成本统计（app.db）：命名卷，非 root 用户可直接写
+      - app_data:/app/data
+      # 产物目录映射到宿主机，方便直接查看与取用
+      - ./Agent_output:/app/Agent_output
+    restart: unless-stopped
+    healthcheck:
+      # 探活走 GET /（不含 LLM 探测，开销低）；/health 会真实探测模型，不适合做高频探活
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=5); print('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  web:
+    build: .
+    image: genai-career-assistant:latest
+    command: >-
+      python -m streamlit run app.py
+      --server.headless true
+      --server.address 0.0.0.0
+      --server.port 8501
+      --browser.gatherUsageStats false
+    env_file: .env
+    ports:
+      - "8501:8501"
+    volumes:
+      - app_data:/app/data
+      - ./Agent_output:/app/Agent_output
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('localhost', 8501), 2); print('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  app_data:
