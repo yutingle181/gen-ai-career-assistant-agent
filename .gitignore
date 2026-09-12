@@ -37,8 +37,15 @@ Thumbs.db
 # Local/dev artifacts (not source)
 .codebuddy/
 .playwright-cli/
+.playwright-mcp/          # Playwright MCP 的快照 / 控制台日志
+/home.yaml                # Playwright 可访问性快照（曾误提交，根锚定以免误伤配置 yaml）
+/home2.yaml
+/web_home.yaml
 .coverage
+.coverage.*
 data/index/
 data/uploads/
+data/eval/
 *.faiss
 web_home.png
+*.tmp

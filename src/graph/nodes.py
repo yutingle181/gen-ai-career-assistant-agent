@@ -25,12 +25,16 @@ from ..rag.registry import get_registry
 from ..state import (
     CAT_FALLBACK,
     CAT_INTERVIEW,
+    CAT_INTERVIEW_REVIEW,
+    CAT_JD_MATCH,
     CAT_JOB_SEARCH,
     CAT_KNOWLEDGE,
     CAT_LEARNING,
     CAT_RESUME,
     MODE_FALLBACK,
     MODE_INTERVIEW_QUESTIONS,
+    MODE_INTERVIEW_REVIEW,
+    MODE_JD_MATCH,
     MODE_JOB_SEARCH,
     MODE_KNOWLEDGE,
     MODE_LABELS,
@@ -91,7 +95,7 @@ def _parse_text(raw: str, schema):
 
 # ---------------------------------------------------------------- 一级分类
 def categorize(state: State) -> dict:
-    """一级分类：学习 / 简历 / 面试 / 求职 / 知识库。"""
+    """一级分类：学习 / 简历 / 面试 / 求职 / 知识库 / JD 匹配 / 面试复盘。"""
     query = state.get("query", "")
     logger.info("一级分类 | %s", summarize(query))
 
@@ -121,9 +125,17 @@ def _has_knowledge_signal(query: str) -> bool:
 
 
 def _heuristic_category(query: str) -> tuple[str, str]:
-    """关键词兜底：LLM 不可用或输出非法时保证图永远有出口。"""
+    """关键词兜底：LLM 不可用或输出非法时保证图永远有出口。
+
+    规则顺序有讲究：「复盘」「匹配度」这类更具体的意图必须排在
+    「面试」「简历」之前，否则「帮我复盘刚才的面试」「简历和这个 JD 匹配吗」
+    会被宽泛的面试/简历规则截胡。同理，jd_match 只认「匹配」类措辞，
+    不认裸 "jd"，以免「根据 JD 改写简历」被误判。
+    """
     q = (query or "").lower()
     rules = [
+        (CAT_INTERVIEW_REVIEW, ("复盘", "面试总结", "回顾一下面试", "刚才的面试", "面得怎么样", "面试哪里")),
+        (CAT_JD_MATCH, ("匹配度", "匹配吗", "吻合度", "还差什么", "哪里不匹配", "匹配情况")),
         (CAT_KNOWLEDGE, ("知识库", "上传的文档", "资料里", "根据文档", "我上传", "简历里")),
         (CAT_JOB_SEARCH, ("招聘", "职位", "岗位", "job", "找工作", "求职", "在招", "招人")),
         (CAT_RESUME, ("简历", "resume", "cv")),
@@ -208,6 +220,14 @@ def job_search(state: State) -> dict:
     return _leaf(MODE_JOB_SEARCH, "提示：在问题里写清**城市**和**岗位**，检索结果会更准。")
 
 
+def jd_match(state: State) -> dict:
+    return _leaf(MODE_JD_MATCH, "把岗位 JD 与你的简历一起发我，我会给出匹配分、命中项与缺口清单。")
+
+
+def interview_review(state: State) -> dict:
+    return _leaf(MODE_INTERVIEW_REVIEW, "把面试中的问题与你的回答贴给我，我来复盘薄弱点并给出改进动作。")
+
+
 def knowledge_qa(state: State) -> dict:
     registry = get_registry()
     names = registry.names()
@@ -231,6 +251,8 @@ def route_query(state: State) -> str:
         CAT_INTERVIEW: "handle_interview_preparation",
         CAT_JOB_SEARCH: "job_search",
         CAT_KNOWLEDGE: "knowledge_qa",
+        CAT_JD_MATCH: "jd_match",
+        CAT_INTERVIEW_REVIEW: "interview_review",
     }
     if category in mapping:
         logger.info("路由 | %s -> %s", category, mapping[category])

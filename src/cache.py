@@ -23,6 +23,7 @@ _PRICE_TABLE = {
     "deepseek-reasoner": {"in": 0.55, "out": 2.19},
     "gpt-4o-mini": {"in": 0.15, "out": 0.60},
     "gpt-4o": {"in": 2.50, "out": 10.00},
+    "qwen-turbo": {"in": 0.04, "out": 0.12},
     "qwen-plus": {"in": 0.11, "out": 0.30},
     # qwen-plus 的固定快照版，单价与 qwen-plus 一致
     "qwen-plus-2025-07-28": {"in": 0.11, "out": 0.30},
@@ -84,6 +85,8 @@ class CostTracker:
         self.completion_tokens = 0
         self.calls = 0
         self.total_latency_ms = 0
+        self.cache_read_tokens = 0
+        self.cache_creation_tokens = 0
 
     def record(
         self,
@@ -99,6 +102,12 @@ class CostTracker:
             self.completion_tokens += c
             self.calls += 1
             self.total_latency_ms += latency_ms
+
+    def record_cache(self, read: int, creation: int) -> None:
+        """累计命中缓存 / 新建缓存的 input tokens（来自 DashScope 上下文缓存）。"""
+        with self._lock:
+            self.cache_read_tokens += read
+            self.cache_creation_tokens += creation
 
     def cost_usd(self, model: str | None = None) -> float:
         model = model or config.MODEL_NAME
@@ -116,6 +125,8 @@ class CostTracker:
             "输入 tokens": self.prompt_tokens,
             "输出 tokens": self.completion_tokens,
             "合计 tokens": self.prompt_tokens + self.completion_tokens,
+            "缓存命中 tokens": self.cache_read_tokens,
+            "缓存创建 tokens": self.cache_creation_tokens,
             "估算费用(USD)": round(self.cost_usd(), 6),
             "累计耗时(ms)": self.total_latency_ms,
         }

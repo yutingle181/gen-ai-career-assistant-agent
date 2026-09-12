@@ -13,7 +13,9 @@ from .nodes import (
     handle_interview_preparation,
     handle_learning_resource,
     handle_resume_making,
+    interview_review,
     interview_topics_questions,
+    jd_match,
     job_search,
     knowledge_qa,
     mock_interview,
@@ -43,6 +45,8 @@ def build_app():
     workflow.add_node("ask_query_bot", ask_query_bot)
     workflow.add_node("interview_topics_questions", interview_topics_questions)
     workflow.add_node("mock_interview", mock_interview)
+    workflow.add_node("jd_match", jd_match)
+    workflow.add_node("interview_review", interview_review)
     workflow.add_node("fallback", fallback)
 
     workflow.add_edge(START, "categorize")
@@ -56,6 +60,8 @@ def build_app():
             "handle_interview_preparation": "handle_interview_preparation",
             "job_search": "job_search",
             "knowledge_qa": "knowledge_qa",
+            "jd_match": "jd_match",
+            "interview_review": "interview_review",
             "fallback": "fallback",
         },
     )
@@ -83,6 +89,8 @@ def build_app():
         "ask_query_bot",
         "interview_topics_questions",
         "mock_interview",
+        "jd_match",
+        "interview_review",
         "fallback",
     ):
         workflow.add_edge(node, END)

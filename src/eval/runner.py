@@ -75,7 +75,8 @@ def _eval_one(
     """跑单条样本的检索，返回 (召回片段, golden_chunk_ids, 耗时ms)；失败返回 None。"""
     try:
         start = time.perf_counter()
-        chunks = pipeline.retrieve(rec.question, cfg)
+        # 评测需测「冷启动」检索延迟：跳过召回缓存，避免基线预热后同配置组延迟被打平
+        chunks = pipeline.retrieve(rec.question, cfg, use_cache=False)
         latency = int((time.perf_counter() - start) * 1000)
     except Exception as exc:  # noqa: BLE001
         logger.warning("检索失败，跳过样本：%s", exc)
@@ -103,7 +104,7 @@ def _judge_one(
 ) -> tuple[float, int]:
     """检索 + 幻觉判定（用于一次性基线判定）。"""
     try:
-        chunks = pipeline.retrieve(rec.question, cfg)
+        chunks = pipeline.retrieve(rec.question, cfg, use_cache=False)
     except Exception as exc:  # noqa: BLE001
         logger.debug("基线检索失败，跳过该样本判定：%s", exc)
         return 0.0, 0

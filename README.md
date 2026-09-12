@@ -1,12 +1,16 @@
 # GenAI Career Assistant · RAG + Agent 职业引擎
 
-一个**可运行、可演示、可度量**的 GenAI 职业助手工程：左边是「LangGraph 多 Agent 职业助手」（教程 / 答疑 / 简历 / 面试题 / 模拟面试 / 职位搜索），右边是「企业知识库 RAG 引擎」（上传文档 → 混合检索 → 重排 → 带引用问答）。对外同时提供 **Streamlit 演示界面**与 **FastAPI 服务接口**，并内置 **效果评测体系**（Recall@5 / MRR / 命中率 / 幻觉率 + A-B 对比报告）。
+> 当前版本 **v1.1.0** · 变更记录见 [§十](#十版本与变更记录)
+
+![GenAI 职业助手创意海报](../jobseeker/docs/portfolio/assets/genai-career-assistant-poster.png)
+
+一个**可运行、可演示、可度量**的 GenAI 职业助手工程：左边是「LangGraph 多 Agent 职业助手」（教程 / 答疑 / 简历 / 面试题 / 模拟面试 / 职位搜索 / **JD 匹配诊断** / **面试复盘**），右边是「企业知识库 RAG 引擎」（上传文档 → 混合检索 → 重排 → 带引用问答）。对外同时提供 **Streamlit 演示界面**与 **FastAPI 服务接口**，并内置 **效果评测体系**（Recall@5 / MRR / 命中率 / 幻觉率 + A-B 对比报告），以及**显式检索 vs Function Calling 双路径 A/B**。
 
 > 目标：一份能直接写进简历、扛得住面试官追问（召回率多少？怎么优化的？为什么这么切分？）的工程化作品。
 
 ---
 
-## 一、功能一览（7 个入口）
+## 一、功能一览（9 个场景）
 
 | # | 功能 | 模式 | 说明 |
 |---|------|------|------|
@@ -17,8 +21,23 @@
 | 5 | 模拟面试 | `mock_interview` | 面试官一问一答，结束输出结构化评价与改进建议 |
 | 6 | 职位搜索 | `job_search` | 按城市 + 岗位关键词检索，整理为 Markdown 职位清单 |
 | 7 | 知识库问答 | `knowledge` | 上传 PDF/Word/MD/HTML/TXT → 混合检索 + 重排 + 带引用问答 |
+| 8 | JD 匹配诊断 | `jd_match` | 结合已关联的岗位 JD 与简历，结构化产出总分 / 分项得分 / 命中项 / 缺口项 / 面试准备重点 |
+| 9 | 面试复盘 | `interview_review` | 把已结束的面试还原为表现评分 / 追问链 / 薄弱点 / 改进动作，归档后在前端分区卡片展示 |
 
-输入一句话会自动路由到对应模式，也可在侧边栏手动强制切换。支持通过 `user_context` 注入用户画像（由 jobseeker 薄网关传入岗位 JD + 关联简历），使 7 个能力直接结合用户背景作答。
+输入一句话会自动路由到对应模式，也可在侧边栏手动强制切换。支持通过 `user_context` 注入用户画像（由 jobseeker 薄网关传入岗位 JD + 关联简历），使 9 个场景直接结合用户背景作答。
+
+### 界面速览：JD 匹配诊断与面试复盘
+
+**JD 匹配诊断评分卡**（`jd_match` 模式）：结合已关联的岗位 JD 与简历，一次结构化产出**总分 / 分项得分 / 命中项 / 缺口项 / 面试准备重点**，每一项都落到具体证据上，而不是给一句「匹配度还不错」。真机实测返回 **73/100**（技能 80 / 经验 70 / 学历 0 / 项目 80），前端渲染为环形总分 + 分项进度条 + 命中 / 缺口双栏：
+
+<img src="docs/screenshots/jd-scorecard.png" alt="JD 匹配诊断评分卡：环形总分 73/100、分项得分进度条、命中项与缺口项双栏" width="720">
+
+**面试复盘分区卡片**（`interview_review` 模式）：把已结束的面试归档为**表现评分 / 追问链 / 薄弱点 / 改进动作**四段式卡片。左图是宽屏布局，右图是同一界面在**窄屏（415px）**下的效果——四段卡片由横向排布自动**堆叠为纵向**，文字不裁切、不出现横向滚动条：
+
+<p align="left">
+  <img src="docs/screenshots/review-cards.png" alt="面试复盘四段式分区卡片：表现评分、追问链、薄弱点、改进动作" width="430">
+  <img src="docs/screenshots/review-cards-narrow.png" alt="面试复盘卡片在窄屏 415px 下自适应堆叠为纵向" width="150">
+</p>
 
 ---
 
@@ -55,8 +74,11 @@ copy .env.example .env
 ### 4. 跑评测并生成报告
 
 ```powershell
-python run_eval.py --kb default --k 5
+python run_eval.py --kb default --top-k 5
 # 报告写入 Agent_output/Eval_Report_*.md
+
+# 额外跑「显式检索 vs Function Calling」双路径 A/B（钉同一模型、可限样本数控制成本）
+python run_eval.py --kb default --tool-ab --tool-ab-model qwen-turbo --tool-ab-samples 15
 ```
 
 或在 Streamlit 侧边栏点「▶️ 运行评测并生成报告」。
@@ -125,18 +147,36 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 ## 四、工程化能力
 
 - **LangGraph 工作流**：分类 → 路由 → 叶子节点（含 `fallback` 兜底），`src/graph/` 只做分类与路由。节点分支（结构化分类、关键词兜底、叶子节点、路由）均确定可测，`test_nodes.py` 已将其覆盖率推至 98%。
+- **Function Calling 双路径（可开关 + 可量化）**：检索这件事**做了两条路，而且能切、能测**：
+  - **显式检索（默认）**：`job_search` 等场景先用 `web_search()` 检索一次，再把结果塞进上下文生成，稳定、可审计。
+  - **Function Calling（`ENABLE_TOOL_CALLING=true`）**：模型通过 `bind_tools()` 自主决定「是否检索、检索什么关键词、检索几次」，闭环由 `src/graph/tool_loop.py` 的 LangGraph 条件边承载（`assistant → tools → assistant`，最多 `TOOL_CALLING_MAX_STEPS=3` 轮，超限强制收束为直接作答；工具异常只回灌一句中文提示，不让堆栈进入上下文）。之所以用条件边而不是 `AgentExecutor` / 手写 `while`：`base.py` 约定「多轮推进权归 `SessionManager`」，工具调用是**单轮内的推理闭环**，用图表达既满足 ReAct 语义又不动既有约定。
+  - **两条路径共享同一套工具实现与超时语义**（守护线程超时 + 失败返回空串），避免「同一件事两条路径行为不同」的隐性缺陷。
+  - **过程可见**：每次工具调用都通过 SSE `tool_call` 事件透出（工具名 / 耗时 / 入参摘要 / 返回摘要，**不含工具返回全文**），Streamlit 与 jobseeker 前端各自渲染为可折叠时间线。
+
+    真浏览器 + 真后端 + 真模型（playwright 驱动）实测的时间线如下：折叠态只报「调用了 1 个工具 · 10.1s」，展开后逐步显示工具名（等宽）/ 序号与耗时 / 入参摘要 / 返回摘要，联网超时降级也如实标出。
+
+    <img src="docs/screenshots/tool-timeline.png" alt="工具调用时间线：折叠摘要「调用了 1 个工具 · 10.1s」与展开后的工具名、耗时、入参摘要、返回摘要" width="720">
+
+  - **A/B 实测**（15 条样本、两条路径钉同一模型 `qwen-turbo`、重排关闭以排除干扰）：
+
+    | 路径 | 成功率 | 平均延迟 | P95 延迟 | 平均 token | 平均轮次 | 平均工具调用 | 工具调用率 |
+    | --- | --- | --- | --- | --- | --- | --- | --- |
+    | 显式检索 | 100% | 6765 ms | 16654 ms | 2392 | 1.00 | 1.00 | 100% |
+    | Function Calling | 100% | **2992 ms** | **6440 ms** | **528** | 1.27 | 0.27 | 26.7% |
+
+    结论：延迟 **-56%**、token **约 0.22x**。差距主要来自「显式路径每次都把 top-K 片段整段塞进 prompt」，而工具调用只在模型判断确有必要时才付出这次开销（仅 26.7% 的样本触发检索）。**口径提醒**：这张表衡量的是链路成本与自主性，不含答案质量；召回质量看 §三 的 Recall@K / MRR 报告。报告产物写入 `Agent_output/Tool_AB_Report_*.md`；复现方式有两种：命令行 `python run_eval.py --tool-ab --tool-ab-model qwen-turbo`，或界面侧边栏勾选「同时跑工具调用 A/B 对比」——两条路径都会钉在同一模型上，避免把「模型差异」误读成「路径差异」。
 - **去阻塞化**：原 Notebook 的 `while True + input()` 改为 `SessionManager.start/step/finish` 单步推进，Web 与 API 共用。
 - **流式输出**：界面默认**在对话气泡内逐字渲染**，不用干等整段生成完。链路是模型侧 `llm_stream` → `SessionManager.start_stream/step_stream` → SSE `/chat/stream`。实现要点：提交输入只做「入队」，真正的生成放到对话容器内部执行，因此流式文字直接落在助手气泡里，不会先在容器外渲染、结束再跳进消息列表。侧边栏有「⚡ 流式输出」开关，可切回一次性显示做对比；流式中途失败给友好提示而非抛栈；完整回复在流结束后才入栈，避免把「半截回答」带进下一轮上下文。
 - **结构化输出**：分类结果、面评、职位清单、引用片段均用 Pydantic + `with_structured_output`。
-- **稳定性**：`tenacity` 重试退避、显式 timeout、信号量限流、`diskcache` 结果缓存、降级链（联网失败→纯 LLM；Rerank 失败→按融合分）。
+- **稳定性**：`tenacity` 重试退避、显式 timeout、信号量限流、`diskcache` 结果缓存（回答缓存 + 召回候选缓存，缓存 key 含知识库指纹，重建库后自动失效）、降级链（联网失败→纯 LLM；Rerank 失败→按融合分）。
 - **成本治理**：`tiktoken` token 统计与成本汇总，界面侧边栏实时展示。
 - **安全与日志**：输入敏感词过滤、输出内容安全校验；统一日志仅记录 query 摘要（截断 120 字）/ 耗时 / token / 命中数，**禁止记录 API Key 与文档全文**。
-- **多模型可切换**：DeepSeek（默认）/ 通义 / OpenAI 等，通过 `OPENAI_BASE_URL` 切换；Embedding 与 Rerank 同样可配置。当前 `.env` 使用百炼 `qwen-plus-2025-07-28`（与 `qwen-plus` 同系列的固定快照版，产出稳定、成本友好）。
+- **多模型可切换**：DeepSeek（默认）/ 通义 / OpenAI 等，通过 `OPENAI_BASE_URL` 切换；Embedding 与 Rerank 同样可配置。当前 `.env` 走百炼兼容模式，**强模型 `qwen-plus-latest` + 快模型 `qwen-turbo`**（`MODEL_STRONG` / `MODEL_FAST`），配合 `model_routing.py` 做分级路由：带 `user_context`、结构化输出与工具调用的重任务走强模型，简单闲聊/教程类可降级到快模型。
 
 ### 可观测性：OpenTelemetry 链路追踪
 - **开箱即用、零侵入**：未安装 `opentelemetry` 或未设置 `OTEL_EXPORTER_OTLP_ENDPOINT` 时，全部埋点为 no-op，对业务零开销、零报错（见 `src/telemetry.py`）。
 - **启用**：`pip install -r requirements-otel.txt`，再设置 `OTEL_EXPORTER_OTLP_ENDPOINT`（兼容 OTLP 的后端，如 Jaeger / Tempo / 阿里云 ARMS），进程启动即自动导出 span。
-- **覆盖链路**：`server.request`（FastAPI 自动埋点）→ `agent.respond`（单轮生成）→ `graph.classify`（路由分类）→ `rag.retrieve` / `rag.ingest` / `rag.answer` → `llm.invoke` / `llm.stream`（模型调用，含 model / 字符数 / 错误类型 / latency）。`GET /health` 触发 `llm.health` span，可用于验证链路连通。
+- **覆盖链路**：`server.request`（FastAPI 自动埋点）→ `agent.respond`（单轮生成）→ `graph.classify`（路由分类）→ `rag.retrieve` / `rag.ingest` / `rag.answer` → `llm.invoke` / `llm.stream`（模型调用，含 model / 字符数 / 错误类型 / latency）→ 工具调用路径额外有 `agent.tool_call.round`（第几轮）与 `agent.tool_call`（**只记工具名 / 轮次 / 耗时 / 是否成功**，不记查询原文与返回内容）。`GET /health` 触发 `llm.health` span，可用于验证链路连通。
 - **隐私**：span 只记录查询长度与模式，不记录用户输入原文与知识库片段内容。
 
 ### 代码规范与静态检查
@@ -148,13 +188,19 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 
 ### 测试与覆盖率
 - **一键运行**：`pip install -r requirements-dev.txt` 后直接 `pytest`（`pyproject.toml` 中已配好 `testpaths` 与 `pythonpath`，不依赖调用方式）。
-- **用例规模**：**186 条**（pytest 实际收集数，含参数化展开），分散在 18 个测试文件中，全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，因此 CI 无需任何 API Key。
-- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **89%**（其中 `src/eval/runner.py` 已达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
+- **用例规模**：**293 条**（pytest 实际收集数，含参数化展开），分散在 28 个测试文件中，全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，因此 CI 无需任何 API Key。
+- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **90%**（其中 `src/eval/runner.py` 已达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
 - **测试文件清单**：
   - `test_api.py`（接口鉴权 / 限流 / SSE / 知识库检索）
-  - `test_graph_route.py`（7 模式路由与端到端冒烟）
+  - `test_graph_route.py`（9 模式路由与端到端冒烟）
+  - `test_tool_calling.py`（伪工具 + 伪模型：正常调用 / 达轮次上限收束 / 工具异常回灌 / 开关关闭走旧路径）
+  - `test_tool_eval.py`（双路径 A/B 汇总口径、失败样本容错、报告章节）
+  - `test_run_eval_cli.py`（`run_eval.py` 命令行参数契约、A/B 样本截断与参数传导、A/B 失败降级，全程打桩离线可跑）
+  - `test_jd_match.py` / `test_interview_review.py`（结构化产出、回退路径、缺上下文降级提示、前端字段对齐）
+  - `test_stream_persistence.py`（流式回复入栈 / 落库、`auto_finish` 语义、按轮清空工具事件）
+  - `test_ui_render.py`（新卡片渲染与 HTML 转义）
   - `test_nodes.py`（LangGraph 节点与路由分支，本次新增，推高 `nodes.py` 至 98%）
-  - `test_rag.py` / `test_loaders.py` / `test_rerank.py`（解析、混合检索、重排）
+  - `test_rag.py` / `test_loaders.py` / `test_rerank.py` / `test_retrieval_cache.py`（解析、混合检索、重排、召回候选缓存）
   - `test_eval.py`（评测指标与数据集生成）
   - `test_session.py` / `test_storage.py`（单步会话推进、产物存取与越权防护）
   - `test_hitl.py`（人机协同草稿→定稿全流程）
@@ -165,6 +211,11 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
   - `smoke_test.py`（整体冒烟）
 - **覆盖范围**：7 模式路由与端到端冒烟、FastAPI 鉴权 / 限流 / SSE / 知识库检索、内容安全（注入拦截与脱敏）、产物存储（含删除越权防护）、缓存与成本统计、文档解析失败降级、链路追踪 no-op 兜底、人机协同草稿→定稿全流程。
 - **补全测试时捕获并修复的真实缺陷**：`src/eval/dataset.py` 原用 `model_dump_json(ensure_ascii=False)`，pydantic 2.11 起不再接受该参数，保存评测集会直接崩溃（已改为 `json.dumps(..., ensure_ascii=False)`）。
+- **端到端联调时捕获并修复的真实缺陷**（都是「界面看着正常、数据其实丢了」的那一类）：
+  1. **流式接口绕过会话层**：`/chat/stream` 曾直接调 `agent.respond_stream()`，导致生成的**完整回复既没进 `history` 也没进 `record`**——多轮对话里模型看不到自己上一轮说了什么，`GET /sessions/{id}` 归档也拿不到任何 AI 产出（复盘永远为空）。现改为走 `SessionManager.start_stream/step_stream(auto_finish=False)`。
+  2. **流式回复未落库**：归档接口读的是消息表，而非流式接口只写了用户消息。现补上助手回复落库。
+  3. **雪花 ID 精度丢失**：主键是 19 位雪花 Long，浏览器 `JSON.parse` 后会被四舍五入（`...587778` 变 `...587800`），回传时 `position_id` 已经是错的，`user_context` 静默注入失败。现由 `JacksonConfig` 统一把 Long 序列化为字符串（`int` 不受影响，`Result.code` 仍是数字）。
+  4. **长结构化调用被中间层超时掐断**：网关 OkHttp 读超时 120s，而结构化输出在首个 token 前可能长时间静默。现由 `/chat/stream` 每 15s 发一条 SSE 注释心跳（`: keep-alive`，不产生事件、前端自然忽略）保活。
 
 ### 人机协同（Human-in-the-Loop）
 高风险场景**不全自动化**——产物先落草稿，经人工确认后才定稿。
@@ -209,18 +260,18 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 src/
 ├── config.py / llm.py / embeddings.py / models.py / cache.py / safety.py
 ├── state.py / storage.py / session.py / tools.py / logging_setup.py / telemetry.py
-├── prompts/        # 分类 few-shot、7 个人设、RAG 提示词
+├── model_routing.py / ui_style.py
+├── prompts/        # 分类 few-shot、9 个人设、RAG 提示词
 ├── rag/            # loaders/clean/split/vectorstore/bm25/fuse/rerank/pipeline/registry
-├── agents/         # learning/interview/resume/jobsearch/knowledge + base
-├── graph/          # nodes.py / workflow.py（LangGraph 路由）
+├── agents/         # learning/interview/resume/jobsearch/knowledge/jd_match/interview_review + base
+├── graph/          # nodes.py / workflow.py（LangGraph 路由）/ tool_loop.py（Function Calling 子图）
 ├── api/            # db/schemas/deps/routers(main, chat, knowledge, sessions, health)
-└── eval/           # dataset/metrics/runner/report
+└── eval/           # dataset/metrics/runner/report/tool_eval.py（双路径 A/B）
 app.py              # Streamlit 入口
 run_web.ps1 / run_api.ps1 / run_eval.py
-tests/              # 18 个测试文件（test_api / test_graph_route / test_nodes / test_rag /
-                   #   test_loaders / test_rerank / test_eval / test_session / test_storage /
-                   #   test_hitl / test_telemetry / test_safety / test_cache / test_tools /
-                   #   test_llm / test_embeddings / test_logging_setup / smoke_test）
+docs/screenshots/   # 端到端验证截图（JD 评分卡 / 工具时间线 / 复盘卡片，含窄屏）
+tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会话 / 安全 / 缓存 / 工具 /
+                   #   人机协同 / 工具调用 / 双路径 A/B / 新场景 / 流式一致性 / 卡片渲染）
 .github/workflows/ci.yml   # CI 门禁（ruff lint / 跨版本 test 矩阵 / 锁文件校验 / 依赖漏洞扫描）
 ```
 
@@ -231,7 +282,7 @@ tests/              # 18 个测试文件（test_api / test_graph_route / test_no
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | POST | `/chat` | 同步对话（支持 `user_context`：外部注入的用户画像，每轮以 SystemMessage 前置） |
-| POST | `/chat/stream` | **SSE 流式对话**（逐段返回 delta；同样支持 `user_context`） |
+| POST | `/chat/stream` | **SSE 流式对话**（逐段返回 delta；同样支持 `user_context`）。事件类型：`session` / `delta` / `tool_call`（工具调用过程，可折叠时间线用）/ `done`（含 `tool_events` 与结构化产物 `structured`）；静默期每 15s 发一条 `: keep-alive` 注释保活 |
 | POST | `/chat/finish` | 结束会话并导出产物 |
 | POST | `/chat/confirm` | 人机协同：草稿确认定稿 |
 | POST | `/knowledge/{kb}/ingest` | 上传文件建库（multipart） |
@@ -263,9 +314,9 @@ tests/              # 18 个测试文件（test_api / test_graph_route / test_no
 - 为什么选混合检索 + RRF？召回率提升多少？
 - 为什么用 LLM Rerank 而非 CrossEncoder（无 GPU 约束）？
 - chunk_size / overlap 怎么定？标题感知切分的收益。
-- Function Calling 与显式检索两条路径的取舍。
+- Function Calling 与显式检索两条路径的取舍（含实测：延迟 -56%、token 0.22x，见 §四）。
 - 评测集怎么来的（不是拍脑袋），指标口径如何固定。
-- 覆盖率 89% 是怎么达成的？哪些分支最难测（如 OTel 真实 tracer 路径需 SDK）？
+- 覆盖率 90% 是怎么达成的？哪些分支最难测（如 OTel 真实 tracer 路径需 SDK）？
 
 ---
 
@@ -276,11 +327,48 @@ tests/              # 18 个测试文件（test_api / test_graph_route / test_no
 - 自动路由可用：示例「帮我写一篇 LangGraph 实战教程」正确路由到「教程生成」模式并生成会话记录（写入产物面板）。
 - 异常优雅降级：模型 Key 无效时，对话返回中文提示「模型调用失败，请检查 .env 配置后重试」，**不出现堆栈白屏**；缺 Key 时侧边栏显示「模型未连通」提示条。
 - FastAPI 路由已注册并可用：`GET /sessions`、`GET /health` 均返回 200 与真实数据（经 `openapi.json` 核实含 `/chat`、`/knowledge`、`/sessions`、`/health` 等业务路径）。
-- 测试套件：186 条用例、覆盖率 89%、`ruff check` 0 违规，CI 矩阵（3.10/3.11/3.12）全绿。
+- **新增场景端到端实测（真浏览器 + 真后端 + 真模型，playwright 驱动）**：
+  - **JD 匹配评分卡**：关联「AI 应用工程师」岗位 + 简历后提问，返回 **73/100**，分项 技能 80 / 经验 70 / 学历 0 / 项目 80，命中项 3 条、缺口项 3 条、面试准备重点 3 条，前端渲染为环形总分 + 分项进度条 + 命中/缺口双栏。
+  - **面试复盘分区卡片**：提交一段模拟面试记录后返回 **65/100**（技术深度 60 / 问题结构 70 / 证据支撑 60），归档后在「面试复盘」页渲染为 四段式卡片：表现评分（4 枚环形指标）、追问链还原（Q1–Q4 步骤条）、薄弱点（警示色左边框）、改进动作（可勾选清单）。
+  - **工具调用时间线**：`job_search` 模式下模型自主调用 `search_web`，前端渲染折叠摘要「调用了 1 个工具 · 10.1s」，展开显示工具名（等宽）/ 序号与耗时 / 入参摘要 / 返回摘要；本次联网实际超时降级，时间线如实显示「联网检索无结果或暂不可用，请基于已有信息作答」。
+- 测试套件：**293 条用例、覆盖率 90%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
 
 ### 已知问题 / 注意
 - **必须配置有效 Key**：对话与知识库建库分别依赖 `OPENAI_API_KEY` 与 `EMBEDDING_API_KEY`（Embedding 默认走硅基流动 `BAAI/bge-m3`）。未配置或无效时仅能演示路由/建库/检索流程，真实生成会降级。
+- **模型额度是按模型独立计算的**：百炼免费额度用尽后返回 `HTTP 403 AllocationQuota.FreeTierOnly`（表现为「模型调用失败，请检查 .env」）。实测同一账号下 `qwen3.7-plus` / `qwen-plus` / `qwen-turbo-latest` 会耗尽，而 **`qwen-plus-latest` / `qwen-max` / `qwen3-max` / `qwen-flash` / `qwen-long` / `qwen-turbo` 仍可用**。换模型只需改 `.env` 的 `MODEL_NAME` / `MODEL_STRONG` / `MODEL_FAST`（用 `dotenv.set_key` 就地改写，不会动其它行）。本文 A/B 对比表是在 `qwen-turbo` 上跑的（两条路径钉同一模型，对比有效）；端到端实测在 `qwen-plus-latest` 上完成。
+- **纯文本模式下 A/B 测量的是链路成本**：`Tool_AB_Report` 不含答案质量指标，别把它当成「Function Calling 更准」的证据。
 - **Starlette 版本锁定**：`requirements.txt` 已固定 `starlette<1.0`——Starlette 1.x 会让 FastAPI 的 `include_router` 失效、导致全部业务路由丢失。安装后若 `openapi.json` 路径为空，请确认 starlette 版本。
 - **Windows / faiss**：若 `import faiss` 报 numpy 不兼容，执行 `pip install "numpy<2"`。
-- **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 89% 覆盖率的主要缺口所在。
+- **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 90% 覆盖率的主要缺口所在。
 - 评测（`run_eval.py` 或界面「运行评测」）需要至少一个已建库的知识库，评测集会优先从知识库 chunk 反向生成。
+
+---
+
+## 十、版本与变更记录
+
+版本号唯一来源：`src/__init__.py::__version__`（FastAPI 的 `openapi.info.version` 直接引用它，避免两处漂移）。
+
+### v1.1.0（当前）
+
+**新增能力**
+
+- **Function Calling 自主工具调用链路**：`src/graph/tool_loop.py`（LangGraph 条件边 ReAct 闭环：轮次上限 3 / 工具超时降级 / 异常只回灌中文提示）；`ENABLE_TOOL_CALLING` 开关默认关闭，与显式检索双路径共存；工具调用过程经 SSE `tool_call` 事件透出，Streamlit 与 jobseeker 前端均渲染可折叠时间线。
+- **两个新场景**：`jd_match`（JD 匹配诊断：总分 / 分项 / 命中项 / 缺口项 / 面试准备重点）与 `interview_review`（面试复盘：表现评分 / 追问链 / 薄弱点 / 改进动作），均为 Pydantic 结构化输出 + Markdown 渲染，前端配评分卡与四段式卡片。
+- **双路径 A/B 评测**：`src/eval/tool_eval.py` + 报告新增章节，产出延迟 / token / 轮次 / 成功率对比（`Agent_output/Tool_AB_Report_*.md`）。
+
+**修复**（联调中发现的跨端缺陷，详见 `INTERVIEW_NOTES.md` §五）
+
+- 雪花 ID 在 JS 侧被四舍五入导致 `user_context` 静默注入失败 → jobseeker 侧 `JacksonConfig` 统一 Long→String。
+- `/chat/stream` 绕过会话层，完整回复未进 `history` / `record` → 改为 `SessionManager.start_stream/step_stream(auto_finish=False)`。
+- 流式回复未落库，归档接口读不到 AI 产出 → 补写消息表。
+- 长结构化调用被网关读超时掐断 → SSE 每 15s 心跳保活（`: keep-alive`）。
+- `KnowledgeAgent.respond` 签名与基类不一致（多传 `model` / `max_tokens` 会 `TypeError`）。
+- 工具层超时语义统一：`get_agent_tools()` 返回的检索工具与 `web_search()` 共享同一套守护线程超时。
+
+**质量**
+
+- 测试 **293 条**（v1.0.0 为 186 条）、覆盖率 **90%**、`ruff check` 0 违规；本轮新增 7 个测试文件，覆盖工具调用、双路径 A/B、新场景、流式一致性、前端卡片渲染与 `run_eval.py` 命令行参数契约。
+
+### v1.0.0
+
+- LangGraph 多 Agent 工作流 + 企业知识库 RAG（混合检索 / RRF / 双 Rerank）+ 评测体系（Recall@K / MRR / HitRate / 幻觉率）+ 人机协同（草稿→确认→定稿）+ 分级模型路由与 Prompt 缓存。

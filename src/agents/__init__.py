@@ -3,6 +3,8 @@
 from ..rag.pipeline import RetrievalConfig
 from ..state import (
     MODE_INTERVIEW_QUESTIONS,
+    MODE_INTERVIEW_REVIEW,
+    MODE_JD_MATCH,
     MODE_JOB_SEARCH,
     MODE_KNOWLEDGE,
     MODE_MOCK_INTERVIEW,
@@ -12,6 +14,8 @@ from ..state import (
 )
 from .base import BaseAgent
 from .interview import InterviewQuestionsAgent, MockInterviewAgent
+from .interview_review import InterviewReviewAgent
+from .jd_match import JDMatchAgent
 from .jobsearch import JobSearchAgent
 from .knowledge import KnowledgeAgent
 from .learning import QAAgent, TutorialAgent
@@ -25,6 +29,8 @@ AGENT_CLASSES = {
     MODE_MOCK_INTERVIEW: MockInterviewAgent,
     MODE_JOB_SEARCH: JobSearchAgent,
     MODE_KNOWLEDGE: KnowledgeAgent,
+    MODE_JD_MATCH: JDMatchAgent,
+    MODE_INTERVIEW_REVIEW: InterviewReviewAgent,
 }
 
 
@@ -47,6 +53,8 @@ __all__ = [
     "MockInterviewAgent",
     "JobSearchAgent",
     "KnowledgeAgent",
+    "JDMatchAgent",
+    "InterviewReviewAgent",
     "create_agent",
     "AGENT_CLASSES",
 ]

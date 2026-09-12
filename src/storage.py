@@ -24,6 +24,8 @@ TYPE_LABELS = {
     "Mock_Interview": ("面评记录", "🎤"),
     "Job_search": ("职位清单", "🔎"),
     "Knowledge_QA": ("知识库问答", "📚"),
+    "JD_Match": ("JD 匹配诊断", "🎯"),
+    "Interview_Review": ("面试复盘", "🧭"),
     "Eval_Report": ("评测报告", "📊"),
 }
 

@@ -16,12 +16,16 @@ from src.models import CategoryResult, InterviewSubResult, LearningSubResult
 from src.state import (
     CAT_FALLBACK,
     CAT_INTERVIEW,
+    CAT_INTERVIEW_REVIEW,
+    CAT_JD_MATCH,
     CAT_JOB_SEARCH,
     CAT_KNOWLEDGE,
     CAT_LEARNING,
     CAT_RESUME,
     MODE_FALLBACK,
     MODE_INTERVIEW_QUESTIONS,
+    MODE_INTERVIEW_REVIEW,
+    MODE_JD_MATCH,
     MODE_JOB_SEARCH,
     MODE_KNOWLEDGE,
     MODE_MOCK_INTERVIEW,
@@ -176,6 +180,8 @@ def test_leaf_nodes():
     assert nodes.interview_topics_questions({})["mode"] == MODE_INTERVIEW_QUESTIONS
     assert nodes.mock_interview({})["mode"] == MODE_MOCK_INTERVIEW
     assert nodes.job_search({})["mode"] == MODE_JOB_SEARCH
+    assert nodes.jd_match({})["mode"] == MODE_JD_MATCH
+    assert nodes.interview_review({})["mode"] == MODE_INTERVIEW_REVIEW
 
 
 def test_knowledge_qa_no_kb(monkeypatch):
@@ -211,6 +217,8 @@ def test_route_query():
     assert nodes.route_query({"category": CAT_INTERVIEW}) == "handle_interview_preparation"
     assert nodes.route_query({"category": CAT_JOB_SEARCH}) == "job_search"
     assert nodes.route_query({"category": CAT_KNOWLEDGE}) == "knowledge_qa"
+    assert nodes.route_query({"category": CAT_JD_MATCH}) == "jd_match"
+    assert nodes.route_query({"category": CAT_INTERVIEW_REVIEW}) == "interview_review"
     assert nodes.route_query({"category": "unknown"}) == "fallback"
 
 

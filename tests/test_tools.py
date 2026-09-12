@@ -106,7 +106,9 @@ def test_get_agent_tools_kb_failure_keeps_web(monkeypatch):
     monkeypatch.setattr(config, "ENABLE_WEB_SEARCH", True)
     monkeypatch.setattr(lct, "DuckDuckGoSearchResults", lambda num_results=5: _DDG(num_results))
     monkeypatch.setattr(
-        tools, "_knowledge_search_tool", lambda name: (_ for _ in ()).throw(RuntimeError("kb boom"))
+        tools,
+        "_knowledge_search_tool",
+        lambda name, retrieval_cfg=None: (_ for _ in ()).throw(RuntimeError("kb boom")),
     )
     got = tools.get_agent_tools("some_kb")
     assert len(got) == 1  # 仅联网工具
@@ -122,8 +124,11 @@ def test_knowledge_search_tool_returns_results(monkeypatch):
             self.source = source
             self.page = page
 
+    calls = {}
+
     class _KB:
-        def retrieve(self, query):
+        def retrieve(self, query, retrieval_cfg=None):
+            calls["cfg"] = retrieval_cfg
             return [_Chunk("答案一"), _Chunk("答案二", "d2")]
 
     class _Reg:
@@ -131,8 +136,10 @@ def test_knowledge_search_tool_returns_results(monkeypatch):
             return _KB()
 
     monkeypatch.setattr(rag_registry, "get_registry", lambda: _Reg())
-    out = tools._knowledge_search_tool("demo").invoke({"query": "问题"})
+    out = tools._knowledge_search_tool("demo", "CFG").invoke({"query": "问题"})
     assert "答案一" in out and "答案二" in out
+    # A/B 评测要求两条路径共享同一检索配置，这里锁住「配置确实透传下去了」
+    assert calls["cfg"] == "CFG"
 
 
 def test_knowledge_search_tool_empty_results(monkeypatch):
@@ -140,7 +147,7 @@ def test_knowledge_search_tool_empty_results(monkeypatch):
     from src.rag import registry as rag_registry
 
     class _KB:
-        def retrieve(self, query):
+        def retrieve(self, query, retrieval_cfg=None):
             return []
 
     class _Reg:

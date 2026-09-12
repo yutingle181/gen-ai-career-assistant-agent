@@ -100,7 +100,7 @@ def test_generate_handles_agent_error(tmp_path, monkeypatch):
     mgr = SessionManager(MODE_RESUME)
     mgr.start("写简历")
 
-    def _raise(query):
+    def _raise(query, model=None, max_tokens=None):
         raise RuntimeError("OPENAI_API_KEY missing")
 
     mgr.agent.respond = _raise
@@ -123,7 +123,7 @@ def test_start_stream_yields_pieces_and_stores_full_reply(tmp_path, monkeypatch)
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(config, "ENABLE_HUMAN_CONFIRM", False)
     mgr = SessionManager(MODE_RESUME)
-    mgr.agent.respond_stream = lambda history: iter(["你好", "，", "世界"])
+    mgr.agent.respond_stream = lambda history, model=None, max_tokens=None: iter(["你好", "，", "世界"])
 
     pieces = list(mgr.start_stream("写简历"))
     assert "".join(pieces) == "你好，世界"
@@ -137,7 +137,7 @@ def test_start_stream_finishes_one_shot_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENABLE_HUMAN_CONFIRM", False)
     mgr = SessionManager(MODE_RESUME)
     mgr.agent.one_shot = True
-    mgr.agent.respond_stream = lambda history: iter(["生成完毕"])
+    mgr.agent.respond_stream = lambda history, model=None, max_tokens=None: iter(["生成完毕"])
 
     assert "".join(mgr.start_stream("写简历")) == "生成完毕"
     assert mgr.finished is True
@@ -148,7 +148,7 @@ def test_step_stream_yields_and_records(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENABLE_HUMAN_CONFIRM", False)
     mgr = SessionManager(MODE_RESUME)
     mgr.start("写简历")
-    mgr.agent.respond_stream = lambda history: iter(["继续", "回答"])
+    mgr.agent.respond_stream = lambda history, model=None, max_tokens=None: iter(["继续", "回答"])
 
     assert "".join(mgr.step_stream("补充")) == "继续回答"
     assert mgr.history[-1].content == "继续回答"
@@ -161,7 +161,7 @@ def test_generate_stream_falls_back_on_error(tmp_path, monkeypatch):
     mgr = SessionManager(MODE_RESUME)
     mgr.start("写简历")
 
-    def _boom(history):
+    def _boom(history, model=None, max_tokens=None):
         raise RuntimeError("OPENAI_API_KEY missing")
 
     mgr.agent.respond_stream = _boom

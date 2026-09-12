@@ -23,6 +23,9 @@ class KnowledgeAgent(BaseAgent):
     artifact = "Knowledge_QA"
     one_shot = False
     needs_search = False
+    # 允许 Function Calling 路径：是否检索、检索几次由模型自主决定。
+    # 开关（config.ENABLE_TOOL_CALLING）关闭时完全走原有固定检索链路。
+    needs_tools = True
 
     def __init__(self, kb_name: str | None = None, retrieval_cfg: RetrievalConfig | None = None):
         super().__init__(kb_name=kb_name, retrieval_cfg=retrieval_cfg)
@@ -31,6 +34,14 @@ class KnowledgeAgent(BaseAgent):
     @property
     def pipeline(self) -> RAGPipeline | None:
         return get_registry().get(self.kb_name) if self.kb_name else None
+
+    def build_tools(self) -> list:
+        """知识库场景只暴露知识库检索工具：联网结果会污染引用来源。"""
+        if not self.needs_tools or not self.kb_name:
+            return []
+        from ..tools import get_agent_tools
+
+        return get_agent_tools(self.kb_name, include_web=False)
 
     def prepare(self, query: str) -> str:
         """检查知识库是否已建库，给出明确中文提示。"""
@@ -41,8 +52,13 @@ class KnowledgeAgent(BaseAgent):
             return "\n\n【提示】当前知识库尚未建库，请先上传文档。"
         return ""
 
-    def respond(self, history: Sequence[BaseMessage]) -> str:
+    def respond(self, history: Sequence[BaseMessage], model: str | None = None,
+                max_tokens: int | None = None) -> str:
         """优先走 RAG；知识库不可用时回退为普通问答。"""
+        if self.use_tool_calling:
+            # 工具调用路径：由模型自主决定何时检索知识库，检索结果自带来源标注
+            return super().respond(history, model=model, max_tokens=max_tokens)
+
         query = self._last_user_text(history)
         pipe = self.pipeline
 
@@ -59,7 +75,9 @@ class KnowledgeAgent(BaseAgent):
         except Exception as exc:  # noqa: BLE001
             logger.warning("知识库问答失败，回退为普通问答：%s", exc)
             return f"知识库检索失败（{type(exc).__name__}），我已回退为通用问答：\n\n" + llm_invoke(
-                [SystemMessage(content=self.system_message), *history]
+                [SystemMessage(content=self.system_message), *history],
+                model=model,
+                max_tokens=max_tokens,
             )
 
         self.last_chunks = result.chunks
@@ -73,9 +91,10 @@ class KnowledgeAgent(BaseAgent):
             )
         return result.answer + citations_text
 
-    def respond_stream(self, history: Sequence[BaseMessage]):
+    def respond_stream(self, history: Sequence[BaseMessage], model: str | None = None,
+                       max_tokens: int | None = None):
         """知识库问答为一次性生成，流式退化为分段推送。"""
-        text = self.respond(history)
+        text = self.respond(history, model=model, max_tokens=max_tokens)
         step = 40
         for i in range(0, len(text), step):
             yield text[i : i + step]
