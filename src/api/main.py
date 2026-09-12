@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .. import config
+from .. import __version__, config
 from ..logging_setup import get_logger
 from ..telemetry import setup_telemetry
 from . import db
@@ -71,7 +71,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="GenAI Career Assistant API",
         description="LangGraph 多 Agent 职业助手 + 企业知识库 RAG 引擎",
-        version="1.0.0",
+        version=__version__,
         lifespan=lifespan,
     )
     # FastAPI 自动埋点：每个请求生成 server.request span（未启用 OTel 时为 no-op）

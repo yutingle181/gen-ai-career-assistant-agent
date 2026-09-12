@@ -7,7 +7,6 @@ import threading
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage
 
 from ...cache import Timer, get_cost_tracker
 from ...graph.workflow import route_only
@@ -21,6 +20,9 @@ from ..schemas import ChatRequest, ChatResponse, FinishRequest
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = get_logger(__name__)
+
+# 静默心跳间隔（秒）：远小于网关 120s 读超时，保证长任务不会被中间层掐断
+KEEPALIVE_SECONDS = 15.0
 
 
 def _resolve_mode(req: ChatRequest) -> str:
@@ -98,18 +100,29 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
     db.add_message(sid, "user", req.query)
 
     async def gen():
-        import json
 
-        from langchain_core.messages import HumanMessage
 
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         sentinel = object()
 
         def produce() -> None:
-            """在独立线程里跑阻塞的同步流式生成，逐段推给事件循环。"""
+            """在独立线程里跑阻塞的同步流式生成，逐段推给事件循环。
+
+            走 SessionManager 的流式入口（而非直接调 agent），原因有三：
+            1. 生成结束后要把**完整回复**写入 history / record，否则多轮上下文里
+               模型看不到自己上一轮说了什么，归档复盘也拿不到任何 AI 产出；
+            2. 首轮的外部资料准备（联网 / 知识库）与模型路由都在会话层；
+            3. 工具调用事件由会话层统一收集，按序透出。
+            `auto_finish=False` 保持「导出 / 定稿由用户显式触发」的既有交互不变。
+            """
             try:
-                for piece in manager.agent.respond_stream(manager._trim_history()):
+                stream = (
+                    manager.start_stream(req.query, auto_finish=False)
+                    if is_new
+                    else manager.step_stream(req.query, auto_finish=False)
+                )
+                for piece in stream:
                     asyncio.run_coroutine_threadsafe(queue.put(piece), loop).result()
             except Exception as exc:  # noqa: BLE001
                 err = exc if isinstance(exc, RuntimeError) else RuntimeError(f"（模型调用失败：{exc}）")
@@ -123,22 +136,34 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
             payload = {"type": "session", "session_id": sid, "mode": manager.mode}
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
-            # 首轮需要把「用户输入 + 外部资料」一起入栈
-            if is_new:
-                context = await asyncio.to_thread(manager.agent.prepare, req.query)
-                manager.history.append(HumanMessage(content=f"{req.query}{context}"))
-                manager.started = True
-                manager.record.append(f"**用户**：{req.query}\n")
-            else:
-                manager.record.append(f"\n**用户**：{req.query}\n")
-                manager.history.append(HumanMessage(content=req.query))
+            def _forward_tool_event(event: dict) -> None:
+                """把工具调用事件同时写入会话列表与 SSE 队列（实时可见）。"""
+                record = {**event, "index": len(manager.tool_events)}
+                manager.tool_events.append(record)
+                asyncio.run_coroutine_threadsafe(queue.put({"__tool_event__": record}), loop).result()
+
+            # 仅在工具调用路径下才会有事件；默认（开关关闭）下该监听器不会被触发。
+            # 用户输入入栈、过程事件重置都由会话层在生成开始时统一处理，避免两处各写一遍。
+            manager.agent.tool_event_listener = _forward_tool_event
 
             buffer: list[str] = []
             producer.start()
             while True:
-                item = await queue.get()
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    # 结构化输出（JD 匹配 / 面试复盘）在模型吐出第一个 token 前可能静默很久，
+                    # 超过中间层（网关 OkHttp 读超时 / 反代）的等待上限就会被掐断连接。
+                    # 发一条 SSE 注释作为心跳：不产生事件，前端解析时会自然忽略。
+                    yield ": keep-alive\n\n"
+                    continue
                 if item is sentinel:
                     break
+                if isinstance(item, dict) and "__tool_event__" in item:
+                    # 工具调用过程实时透出：前端据此渲染可折叠时间线
+                    payload = {"type": "tool_call", **item["__tool_event__"]}
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    continue
                 if isinstance(item, Exception):
                     logger.error("流式生成失败：%s", item)
                     message = str(item)
@@ -149,10 +174,11 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
                 yield f"data: {json.dumps({'type': 'delta', 'text': item}, ensure_ascii=False)}\n\n"
 
             text = safe_output("".join(buffer))
-            from langchain_core.messages import AIMessage
-
-            manager.history.append(AIMessage(content=text))
-            manager.record.append(f"\n**助手**：{text}\n")
+            # 落库：归档接口（GET /sessions/{id} → jobseeker「归档到复盘」）读的是 DB 消息表。
+            # 非流式接口一直有写，流式接口此前漏了这一步，导致复盘归档拿不到任何 AI 产出。
+            # history / record 由会话层在生成结束时统一写入，这里不再重复追加。
+            if text:
+                db.add_message(sid, "assistant", text)
             if manager.agent.one_shot:
                 manager.finish()
 
@@ -164,12 +190,34 @@ async def chat_stream(req: ChatRequest) -> StreamingResponse:
                 "requires_confirmation": manager.requires_confirmation,
                 "awaiting_confirmation": manager.awaiting_confirmation,
                 "draft_artifact": manager.draft_path,
+                # 兜底再给一次完整过程：前端即便漏收中间事件也能补齐时间线
+                "tool_events": list(manager.tool_events),
+                # 结构化产物（如 JD 匹配评分卡）随 done 下发，前端据字段渲染卡片而非纯文本
+                "structured": _structured_payload(manager.agent),
             }
             yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
+            # 还原监听器，避免后续非流式轮次往已关闭的事件循环投递事件
+            manager.agent.tool_event_listener = manager.tool_events.append
             sem.release()
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+def _structured_payload(agent) -> dict | None:
+    """取 Agent 的结构化产物并转成可 JSON 化的字典；没有则返回 None。
+
+    只做透传，不在网关层理解业务字段：编排归 Agent，网关只负责搬运。
+    """
+    result = getattr(agent, "result", None)
+    dump = getattr(result, "model_dump", None)
+    if not callable(dump):
+        return None
+    try:
+        return dump()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("结构化产物序列化失败，已跳过：%s", exc)
+        return None
 
 
 @router.post("/finish", response_model=ChatResponse)

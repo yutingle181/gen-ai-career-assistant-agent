@@ -22,6 +22,9 @@ class JobSearchAgent(BaseAgent):
     artifact = "Job_search"
     one_shot = True
     needs_search = True
+    # 允许 Function Calling 路径：由模型自主决定检索什么关键词、检索几次。
+    # 开关关闭时完全走原有「前置联网检索 + 一次结构化整理」链路。
+    needs_tools = True
     requires_confirmation = True  # 职位清单含外链与求职决策建议，需人工确认
 
     MISSING_INFO_TIP = (

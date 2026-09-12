@@ -11,6 +11,8 @@
 - 工程化去阻塞改造：将 Notebook 内 `while True + input()` 阻塞循环重构为 `SessionManager.start/step/finish` 单步状态机，使同一套业务逻辑在 **Streamlit 与 FastAPI 两端复用**，无两套实现漂移。
 - 建立 **可复现评测体系**：基于知识库 chunk 反向生成评测集（LLM 生成 + 人工校对），固定 `Recall@5 / MRR / Hit Rate / 幻觉率（LLM-as-judge）` 口径，输出「向量 vs 混合检索」「无 / LLM / API Rerank」A-B 对比报告。
 - 稳定性与成本治理：落 `tenacity` 重试退避、信号量限流、超时控制、`diskcache` 结果缓存、`tiktoken` token 成本统计、内容安全过滤与脱敏日志（不记录 Key / 文档全文）。
+- 打通 **Function Calling 自主工具调用**（`bind_tools` + LangGraph 条件边，轮次上限 / 工具异常回灌 / 超时降级三重边界），以 `ENABLE_TOOL_CALLING` 开关与显式检索**双路径共存**，并用 15 条样本实测出 **延迟 -56%、token 0.22x** 的量化结论；工具调用过程经 SSE `tool_call` 事件在两个前端渲染为可折叠时间线。
+- 新增 **JD 匹配诊断**与**面试复盘**两个结构化场景（Pydantic `with_structured_output` + 前端评分卡 / 四段式复盘卡片），并通过 Spring Boot 薄网关把 MySQL 中的岗位 JD 与简历装配成 `user_context` 注入提示词，实现 **AI 编排与业务数据的安全联动**；联调中定位并修复雪花 ID 精度丢失、流式回复未入栈/未落库、长任务被网关读超时掐断等 4 个跨端缺陷。
 
 ---
 
@@ -29,7 +31,15 @@
 > 默认 `chunk_size=500 / overlap=80`（字符级）。太小丢失上下文、太大稀释相关性且浪费 token。标题感知切分（`RecursiveCharacterTextSplitter` + 标题边界优先）能避免把一个知识点的上下文从中间切断，提升片段内聚性，召回更准。
 
 ### Q：Function Calling 与显式检索怎么取舍？
-> 两条路径都落地了：默认走**显式检索**（稳定、低延迟、可控可评测）；同时真实实现 `bind_tools()` + `AgentExecutor` 版本供需要自主规划的场景。显式检索更适合可度量、可审计的 RAG 链路；Function Calling 更适合开放任务。取舍依据是「可控性 vs 自主性」。
+> **两条路径都在跑，且能切、能观测、能量化。** 默认走**显式检索**（先检索一次再生成，稳定、可审计、可评测）；打开 `ENABLE_TOOL_CALLING=true` 后改由模型通过 `bind_tools()` **自主决定**是否检索、检索什么关键词、检索几轮。
+>
+> 循环用 **LangGraph `StateGraph` 条件边**（`assistant → tools → assistant`）实现，而不是 `AgentExecutor` 或手写 `while`——项目约定「多轮人机推进权归 `SessionManager`」，工具调用是**单轮内的推理闭环**，用图表达既满足 ReAct 语义又不动既有约定，也少一层与项目风格不符的抽象。三条安全边界：轮次上限 3（超限强制收束为直接作答）、单步工具沿用守护线程超时、工具异常只回灌一句中文提示（堆栈留在日志，避免异常细节进上下文推高 token）。
+>
+> **实测（15 条样本，两条路径钉同一模型 `qwen-turbo`，重排关闭以排除干扰）**：显式检索 6765 ms / 2392 token；Function Calling **2992 ms / 528 token**——延迟 **-56%**，token **约 0.22x**。原因不是「FC 模型更聪明」，而是显式路径**每次都**把 top-K 片段整段塞进 prompt，而 FC 只在模型判断确有必要时才付这次开销（实测仅 **26.7%** 的样本触发检索，平均 1.27 轮）。这条数字与口径提醒都写进了 `Agent_output/Tool_AB_Report_*.md`。
+>
+> 取舍结论：**成本敏感 + 确定性强的知识库问答留显式检索；开放式、需要多源信息的问题交给 Function Calling**。所以开关默认关闭——不赌模型每次都判断对，而是让两种策略可回滚、可对比。
+>
+> （顺带一个真话：改造前 `get_agent_tools()` 全仓库**没有任何调用点**，即"写了 Function Calling 却根本没接上"，而且它塞进去的 `DuckDuckGoSearchResults` 还缺 `web_search()` 那套超时保护——同一件事两条路径行为不一致。这次先把工具层收敛成单一安全实现，再谈接链路。）
 
 ### Q：为什么 Embedding 走云端而不是本地？
 > 本机无独显、内存 8–16G，本地 `bge-m3` 需 torch（1–2GB）且 CPU 推理慢，新手劝退。改为云端 `/embeddings`（硅基流动 `BAAI/bge-m3`），`faiss-cpu` 做向量库，10 分钟装完。用 `EmbeddingFactory` 抽象保留本地开关，可无缝切换。
@@ -53,6 +63,16 @@
 ### Q：为什么不用一个超大 Prompt 把所有功能塞进去？
 > 职责分离：路由图只分类、Agent 只管单轮生成、RAG 引擎与业务无关可独立评测、API 只做协议转换。这样每层的评测、降级、替换都独立，符合工程中「可度量、可维护」的目标。
 
+### Q：AI 怎么跟业务数据联动？（JD 匹配诊断）
+> 业务数据在 MySQL（岗位 JD + 简历），AI 编排在 Python，中间隔着 Spring Boot 薄网关。网关只做一件事：把前端传的 `position_id / resume_id` **换成 Agent 认识的 `user_context`** 文本（查库 + 拼装，且校验归属当前用户防越权），提示词如何消费由 Agent 决定——网关里没有一行 AI 逻辑。
+>
+> Agent 侧用 Pydantic `with_structured_output` 产出结构化结果（总分 / 分项 / 命中项 / 缺口项 / 面试准备重点），**同时**渲染成 Markdown 供对话展示与落盘；结构化产物随 SSE `done` 事件下发 `structured` 字段，前端据此渲染**评分卡卡片**（环形总分 + 分项进度条 + 命中/缺口双栏），而不是让用户去读一大段文字。实测：关联岗位 + 简历后返回 73/100（技能 80 / 经验 70 / 学历 0 / 项目 80）。
+>
+> 一个细节值得讲：结构化输出**失败时不能空手而归**——`with_structured_output` 异常或返回类型不对时自动回退为纯文本，且提示词里写死了 Markdown 小标题契约，因此**回退路径下前端仍能解析出同样的分区卡片**（复盘页就是这么做的：优先解析结构化 Markdown，失败则回退到后端抽取的「建议 / 弱点」字段）。
+
+### Q：面试复盘为什么不是「再做一个页面」？
+> 因为那会变成第二条重复链路。已有链路是「会话 → 归档 → 复盘字段（suggestions / weaknesses / detail）」，**断点在中间**：归档的只是纯文本，模型从没加工过它；而且流式接口此前根本没把 AI 回复存进会话（见 §五）。所以这次做的是「补断点」：Agent 新增 `interview_review` 模式产出结构化复盘，Java 侧的抽取逻辑改成**按小标题分段**（命中「薄弱点 / 改进动作 / 建议」的标题会把它下面的条目一并带出），前端把同一份文本解析成**四段式卡片**（表现评分环形指标 / 追问链步骤条 / 薄弱点警示列表 / 改进动作可勾选清单）。存量老数据没有小标题，则自动回退到「建议 / 弱点」两块——**不破坏任何历史记录**。
+
 ---
 
 ## 四、现场演示 checklist
@@ -61,8 +81,13 @@
 2. 点快捷示例芯片，确认自动路由命中并出现路由提示条。
 3. 上传一份示例文档 → 建库 → 提问，确认出现「引用来源」区块与原文摘录。
 4. 侧边栏切「重排方式 / top_k」→ 重新提问，确认检索可视化变化。
-5. 点「运行评测」→ 右侧出现 `Eval_Report_*.md`，展示 A-B 对比表。
+5. 点「运行评测」→ 右侧出现 `Eval_Report_*.md`，展示 A-B 对比表；勾上「同时跑工具调用 A/B 对比」再跑一次，报告里会多出「显式检索 vs Function Calling」章节（延迟 / token / 轮次 / 成功率）。
 6. `/docs` 能打开，`/health` 返回模型连通状态。
+7. **三个新界面**（jobseeker 侧，需 :8000 → :8080 → :5173 顺序启动）：
+   - 关联「岗位 + 简历」后选 `JD 匹配诊断` 提问 → 出现评分卡（环形总分 + 分项进度条 + 命中/缺口双栏 + 面试准备重点）。
+   - 选 `面试复盘` 贴一段面试记录 → 点「归档到复盘」→ 到「面试复盘」页展开，看到四段式卡片。
+   - `ENABLE_TOOL_CALLING=true` 时选 `职位搜索` 提问 → 消息下方出现折叠时间线「调用了 N 个工具 · Xs」，展开可见工具名/耗时/入参/返回摘要。
+   - 截图存于 `docs/screenshots/`（`jd-scorecard.png` / `tool-timeline.png` / `review-cards.png`），演示环境无网时也能用图讲。
 
 ---
 
@@ -90,3 +115,13 @@
 
 ### Q：本机 D: 盘为什么导致 Vite 504、Maven 编译失败？怎么绕？
 > 本机安全过滤驱动**全局禁止 D: 盘文件重命名（MoveFile）**。Vite 预构建把 `deps_temp_*` 重命名为 `deps` 被拦 → 持续 504；Maven `resources-plugin` 用「临时文件 + rename」原子拷贝被拦 → `AccessDeniedException`，且 Safe-Delete 拒绝删 `target`。绕法：Vite `cacheDir` 指向 C: 盘；Maven 用 `-Dmaven.resources.skip=true` 或导 classpath 走 `java -cp` 启动；构建产物 `<build><directory>C:/jobseeker-target</directory>` 改到 C: 盘。
+
+### Q：联调时遇到过什么「最难查」的 Bug？
+> 四个，都是「界面看着正常、数据其实丢了」的类型，讲出来比背概念有说服力：
+>
+> 1. **雪花 ID 在 JS 里被四舍五入**：主键是 19 位 Long（`...587778`），浏览器 `JSON.parse` 后变成 `...587800`，回传时 `position_id` 已经是错的 → 网关查不到岗位 → `user_context` **静默**注入失败 → 模型回答「你还没关联岗位」。前端看请求体完全正常、日志也不报错，只能靠**对比前后端 ID 的实际取值**才发现。修法：`JacksonConfig` 全局把 Long 序列化为字符串（`int` 不受影响，`Result.code` 仍是数字），前端把 ID 当不透明字符串透传。
+> 2. **流式接口绕过了会话层**：`/chat/stream` 直接调 `agent.respond_stream()`，于是生成完的**完整回复既没进 `history` 也没进 `record`**——多轮里模型看不到自己上一轮说了什么，归档接口也拿不到任何 AI 产出（复盘永远为空）。修法：改走 `SessionManager.start_stream/step_stream(auto_finish=False)`，保留「导出由用户显式触发」的既有交互。
+> 3. **流式回复没落库**：归档读的是消息表，非流式接口一直在写，流式接口漏了。修法：流结束后补 `db.add_message(sid, "assistant", text)`。
+> 4. **长结构化调用被中间层掐断**：结构化输出在首个 token 前可能静默很久，超过网关 OkHttp 的 120s 读超时 → 网关抛 `BizException: Agent 流式调用失败：timeout`，而 SSE 响应头早已发出，异常只能变成「连接挂着不动」。修法：`/chat/stream` 每 15s 发一条 SSE 注释心跳（`: keep-alive`，不产生事件、前端自然忽略）保活，把读超时从「硬上限」变成「静默上限」。
+>
+> 共同点都是**先怀疑链路，而不是先怀疑模型**：把 SSE 原始事件流、数据库消息表、前后端 ID 取值三处对齐，问题基本就定位了。

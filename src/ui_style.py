@@ -210,6 +210,90 @@ html, body, [data-testid="stAppViewContainer"] {
   30% { transform: translateY(-5px); opacity: 1; }
 }
 
+/* ============ 新场景徽标（复用既有 cap 视觉，只做同色系强调） ============ */
+.cap-new {
+  color: #E9E6FF;
+  background: linear-gradient(120deg, rgba(109,94,248,.34), rgba(34,211,238,.24));
+  border-color: rgba(167,139,250,.55);
+}
+
+/* ============ 工具调用时间线（Function Calling 过程可见） ============ */
+.tl-wrap {
+  margin-top: 10px; padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-left: 2px solid var(--primary);
+  animation: fadeInUp .3s ease both;
+}
+.tl-head {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: var(--text-1);
+}
+.tl-head b { color: var(--text-0); font-weight: 600; }
+.tl-step {
+  display: flex; gap: 10px; padding: 8px 0; margin-top: 6px;
+  border-top: 1px dashed rgba(255,255,255,.08);
+}
+.tl-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: 0 0 auto; }
+.tl-dot.ok { background: var(--ok); }
+.tl-dot.fail { background: var(--err); }
+.tl-dot.run { background: var(--cyan); animation: pulse 1.4s infinite; }
+.tl-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px; color: var(--text-0);
+}
+.tl-ms { font-size: 11.5px; color: var(--text-2); margin-left: 8px; }
+.tl-args { font-size: 11.5px; color: var(--text-2); margin-top: 2px; word-break: break-word; }
+.tl-sum { font-size: 12px; color: var(--text-1); margin-top: 3px; word-break: break-word; }
+.tl-empty { font-size: 12px; color: var(--text-2); margin-top: 6px; }
+
+/* ============ JD 匹配评分卡 ============ */
+.score-card {
+  padding: 14px 16px; border-radius: 16px;
+  background: rgba(255,255,255,0.045);
+  border: 1px solid rgba(255,255,255,0.08);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.22);
+  animation: fadeInUp .35s ease both;
+}
+.score-top { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.score-ring {
+  width: 96px; height: 96px; border-radius: 50%; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+}
+.score-ring > div {
+  width: 76px; height: 76px; border-radius: 50%; background: #101733;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+}
+.score-num { font-size: 24px; font-weight: 700; color: var(--text-0); line-height: 1; }
+.score-cap { font-size: 10.5px; color: var(--text-2); margin-top: 2px; }
+.score-dims { flex: 1 1 220px; }
+.dim { margin-bottom: 9px; }
+.dim-top { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--text-1); }
+.dim-top b { color: var(--text-0); font-weight: 500; }
+.bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,.09); overflow: hidden; margin-top: 4px; }
+.bar > i { display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), var(--cyan)); }
+.score-cols { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; }
+.score-col {
+  flex: 1 1 200px; padding: 10px 12px; border-radius: 12px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+}
+.score-col.hit { border-left: 3px solid var(--ok); }
+.score-col.gap { border-left: 3px solid var(--warn); }
+.score-col h5 { margin: 0 0 6px; font-size: 12.5px; color: var(--text-0); font-weight: 600; }
+.score-col p { font-size: 12.5px; color: var(--text-1); margin: 3px 0; }
+.score-col .none { color: var(--text-2); }
+.focus-strip {
+  margin-top: 12px; padding: 10px 12px; border-radius: 12px;
+  background: linear-gradient(120deg, rgba(109,94,248,.18), rgba(34,211,238,.12));
+  border: 1px solid rgba(167,139,250,.32);
+  font-size: 12.5px; color: var(--text-0);
+}
+.focus-strip b { color: #fff; }
+
 /* 滚动条 */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 8px; }
@@ -266,6 +350,104 @@ def warn_box(body_html: str) -> None:
     import streamlit as st
 
     st.markdown(f'<div class="warn-box">{body_html}</div>', unsafe_allow_html=True)
+
+
+def tool_timeline_html(events: list[dict]) -> str:
+    """工具调用时间线：把 Function Calling 的每一步渲染成可读的一行。
+
+    仅渲染 Agent 上报的摘要字段（工具名 / 耗时 / 参数与结果摘要），
+    不渲染工具原文，与后端「事件不带全文」的隐私约定保持一致。
+    """
+    import html as _html
+
+    def esc(value: object) -> str:
+        return _html.escape(str(value if value is not None else ""))
+
+    if not events:
+        return (
+            '<div class="tl-wrap"><div class="tl-head">🧩 <b>工具调用</b>'
+            '<span>未调用工具，直接作答</span></div></div>'
+        )
+
+    total_ms = sum(int(e.get("elapsed_ms") or 0) for e in events)
+    steps = []
+    for idx, event in enumerate(events, start=1):
+        ok = bool(event.get("ok", True))
+        dot = "ok" if ok else "fail"
+        mark = "✅" if ok else "⚠️"
+        steps.append(
+            f'<div class="tl-step"><span class="tl-dot {dot}"></span><div style="flex:1">'
+            f'<div><span class="tl-name">{mark} {esc(event.get("name", "unknown"))}</span>'
+            f'<span class="tl-ms">#{idx} · {int(event.get("elapsed_ms") or 0)}ms</span></div>'
+            f'<div class="tl-args">入参：{esc(event.get("args_summary", ""))}</div>'
+            f'<div class="tl-sum">返回：{esc(event.get("result_summary", ""))}</div>'
+            "</div></div>"
+        )
+    head = (
+        f'<div class="tl-head">🧩 <b>工具调用过程</b>'
+        f'<span>共 {len(events)} 步 · 合计 {total_ms}ms</span></div>'
+    )
+    return f'<div class="tl-wrap">{head}{"".join(steps)}</div>'
+
+
+def jd_scorecard_html(result, dimension_labels: dict[str, str]) -> str:
+    """JD 匹配评分卡：总分环形 + 分项进度条 + 命中/缺口双栏 + 面试准备重点。"""
+    import html as _html
+
+    def esc(value: object) -> str:
+        return _html.escape(str(value if value is not None else ""))
+
+    total = max(0, min(100, int(getattr(result, "total_score", 0) or 0)))
+    dims = getattr(result, "dimension_scores", None) or {}
+
+    ring = (
+        '<div class="score-ring" style="background:conic-gradient('
+        f"#22D3EE 0% {total}%, rgba(255,255,255,.09) {total}% 100%);\">"
+        f'<div><span class="score-num">{total}</span>'
+        '<span class="score-cap">总分 / 100</span></div></div>'
+    )
+
+    bars = []
+    for key, score in dims.items():
+        label = dimension_labels.get(key, key)
+        pct = max(0, min(100, int(score or 0)))
+        bars.append(
+            f'<div class="dim"><div class="dim-top"><span>{esc(label)}</span>'
+            f"<b>{pct}</b></div>"
+            f'<div class="bar"><i style="width:{pct}%"></i></div></div>'
+        )
+
+    def _col(title: str, items, css: str, empty: str) -> str:
+        items = list(items or [])
+        if items:
+            body = "".join(f"<p>• {esc(i)}</p>" for i in items)
+        else:
+            body = f'<p class="none">{esc(empty)}</p>'
+        return f'<div class="score-col {css}"><h5>{title}</h5>{body}</div>'
+
+    cols = (
+        '<div class="score-cols">'
+        + _col("✅ 命中项", getattr(result, "matched", None), "hit", "暂无命中项")
+        + _col("🟠 缺口项", getattr(result, "gaps", None), "gap", "暂无明显缺口")
+        + "</div>"
+    )
+
+    focus_items = list(getattr(result, "interview_focus", None) or [])
+    focus = ""
+    if focus_items:
+        focus = (
+            '<div class="focus-strip">🎯 <b>面试准备重点</b><br>'
+            + "<br>".join(f"• {esc(i)}" for i in focus_items)
+            + "</div>"
+        )
+
+    summary = esc(getattr(result, "summary", "") or "")
+    sub = f'<div style="font-size:12.5px;color:var(--text-1);margin-bottom:10px">{summary}</div>'
+
+    return (
+        f'<div class="score-card"><div class="score-top">{ring}'
+        f'<div class="score-dims">{sub}{"".join(bars)}</div></div>{cols}{focus}</div>'
+    )
 
 
 def glass_card(title: str, body_html: str) -> None:

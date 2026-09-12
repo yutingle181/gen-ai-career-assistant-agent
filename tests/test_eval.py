@@ -155,7 +155,7 @@ def test_run_all_judges_hallucination_once(monkeypatch):
             self.text = "内容" * 100
 
     class _FakePipeline:
-        def retrieve(self, query, cfg=None):
+        def retrieve(self, query, cfg=None, use_cache=True):
             return [_Chunk("c1"), _Chunk("c2")]
 
     records = [EvalRecord(question=f"q{i}", golden_chunk_ids=["c1"]) for i in range(3)]
@@ -209,7 +209,7 @@ def test_runner_edge_cases_and_fallbacks(monkeypatch):
     assert runner._judge_chunks([_Chunk()]) == (0.0, 0)
 
     class _BoomPipeline:
-        def retrieve(self, query, cfg=None):
+        def retrieve(self, query, cfg=None, use_cache=True):
             raise RuntimeError("检索挂了")
 
     rec = EvalRecord(question="q", golden_chunk_ids=["c1"])

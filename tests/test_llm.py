@@ -21,7 +21,8 @@ from src.llm import (
 
 
 class _FakeModel:
-    def __init__(self) -> None:
+    def __init__(self, **kw) -> None:
+        self.temperature = kw.get("temperature")
         self.bound: float | None = None
 
     def bind(self, temperature=None):
@@ -53,18 +54,22 @@ def test_get_chat_model_build_and_bind(monkeypatch):
     import src.llm as llm
 
     monkeypatch.setattr(config, "OPENAI_API_KEY", "k")
-    monkeypatch.setattr(llm, "ChatOpenAI", lambda **kw: _FakeModel())
+    monkeypatch.setattr(llm, "ChatOpenAI", lambda **kw: _FakeModel(**kw))
     reset_chat_model()
     m = get_chat_model()
     assert m is not None
+    assert m.temperature == config.TEMPERATURE
+    # 不同温度对应独立的缓存客户端，且按参数复用
     m2 = get_chat_model(temperature=0.2)
-    assert m2.bound == 0.2
+    assert m2.temperature == 0.2
+    assert m is not m2
+    assert get_chat_model(temperature=0.2) is m2
 
 
 def test_llm_invoke_returns_text(monkeypatch):
     import src.llm as llm
 
-    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None: _FakeModel())
+    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None, model=None, max_tokens=None: _FakeModel())
     assert llm_invoke([HumanMessage(content="q")]) == "回复内容"
 
 
@@ -75,7 +80,7 @@ def test_llm_invoke_list_content(monkeypatch):
         def invoke(self, msgs):
             return AIMessage(content=[{"text": "a"}, {"text": "b"}])
 
-    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None: _ListModel())
+    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None, model=None, max_tokens=None: _ListModel())
     assert llm_invoke([HumanMessage(content="q")]) == "ab"
 
 
@@ -88,11 +93,11 @@ def test_llm_invoke_retries_on_failure(monkeypatch):
 
         def invoke(self, msgs):
             self.n += 1
-            raise RuntimeError("timeout")
+            raise TimeoutError("timeout")
 
     boom = _Boom()
-    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None: boom)
-    with pytest.raises(RuntimeError):
+    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None, model=None, max_tokens=None: boom)
+    with pytest.raises(TimeoutError):
         llm_invoke([HumanMessage(content="q")])
     assert boom.n >= 2  # 触发了指数退避重试
 
@@ -100,7 +105,7 @@ def test_llm_invoke_retries_on_failure(monkeypatch):
 def test_llm_stream_yields_chunks(monkeypatch):
     import src.llm as llm
 
-    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None: _FakeModel())
+    monkeypatch.setattr(llm, "get_chat_model", lambda temperature=None, model=None, max_tokens=None: _FakeModel())
     assert "".join(llm_stream([HumanMessage(content="q")])) == "你好"
 
 

@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -70,6 +72,8 @@ class RAGPipeline:
         self.store: FaissStore | None = None
         self.bm25: BM25Index | None = None
         self.dim: int = 0
+        # 知识库内容指纹：纳入召回缓存键，保证重建库后旧缓存自动失效
+        self._fingerprint: str = ""
         self._load_if_exists()
 
     # ------------------------------------------------------------ 建库
@@ -117,6 +121,7 @@ class RAGPipeline:
                 self.bm25 = BM25Index()
                 self.bm25.build(chunks)
 
+                self._fingerprint = self._compute_fingerprint()
                 self.save()
 
             sp.set_attribute("kb.chunks", len(chunks))
@@ -149,6 +154,22 @@ class RAGPipeline:
             self.bm25 = bm25
             if not self.chunks:
                 self.chunks = bm25.chunks
+        self._fingerprint = self._compute_fingerprint()
+
+    def _compute_fingerprint(self) -> str:
+        """知识库内容指纹：由片段 id 集合派生，随重建库而变化，用于缓存失效。
+
+        chunk_id 含全局自增序号与文本摘要，改动切分参数或换文档都会改变指纹；
+        用增量 md5 避免拼接大字符串，仅在加载/建库后计算一次。空库返回空串。
+        """
+        if not self.chunks:
+            return ""
+        h = hashlib.md5()
+        h.update(str(len(self.chunks)).encode("utf-8"))
+        for c in self.chunks:
+            h.update(b"\x00")
+            h.update(c.chunk_id.encode("utf-8"))
+        return h.hexdigest()[:16]
 
     @property
     def ready(self) -> bool:
@@ -165,10 +186,41 @@ class RAGPipeline:
         }
 
     # ------------------------------------------------------------ 检索
-    def _candidates(self, query: str, cfg: RetrievalConfig) -> list[RetrievedChunk]:
-        """混合检索 + 融合，返回候选片段（未重排）。"""
+    def _candidates(
+        self,
+        query: str,
+        cfg: RetrievalConfig,
+        sp: Any | None = None,
+        use_cache: bool = True,
+    ) -> list[RetrievedChunk]:
+        """混合检索 + 融合，返回候选片段（未重排）。
+
+        命中召回缓存时直接返回缓存候选，跳过重复的 query 向量化 + BM25 + RRF。
+        缓存键含知识库指纹与召回参数、**不含 reranker**，使「仅重排方式不同」的
+        多组实验复用同一召回；`use_cache=False` 时完全不读写缓存（评测测冷启动用）。
+        """
         if not self.ready:
             return []
+
+        cache = get_cache() if (use_cache and config.ENABLE_RETRIEVAL_CACHE) else None
+        cache_key = None
+        if cache is not None and cache.enabled:
+            cache_key = ResultCache.make_key(
+                "retrieval",
+                self.name,
+                self._fingerprint,
+                query,
+                cfg.use_bm25,
+                cfg.use_vector,
+                cfg.fusion,
+                cfg.top_k,
+                cfg.rerank_top_n,
+            )
+            cached = cache.get(cache_key)
+            if cached is not None:
+                if sp is not None:
+                    sp.set_attribute("rag.retrieval_cache_hit", True)
+                return cached
 
         vector_hits: list = []
         bm25_hits: list = []
@@ -197,7 +249,7 @@ class RAGPipeline:
             )
 
         fused = dedup_by_text(fused)
-        return [
+        candidates = [
             RetrievedChunk(
                 chunk_id=c.chunk_id,
                 text=c.text,
@@ -209,9 +261,21 @@ class RAGPipeline:
             )
             for c, score, info in fused
         ]
+        # 仅缓存非空召回，避免建库前 / 空结果污染缓存
+        if cache is not None and cache_key is not None and candidates:
+            cache.set(cache_key, candidates, expire=config.RETRIEVAL_CACHE_TTL)
+        return candidates
 
-    def retrieve(self, query: str, cfg: RetrievalConfig | None = None) -> list[RetrievedChunk]:
-        """检索 + 重排，返回最终用于生成的片段。"""
+    def retrieve(
+        self,
+        query: str,
+        cfg: RetrievalConfig | None = None,
+        use_cache: bool = True,
+    ) -> list[RetrievedChunk]:
+        """检索 + 重排，返回最终用于生成的片段。
+
+        `use_cache=False` 时跳过召回缓存，供评测测量「冷启动」检索延迟。
+        """
         cfg = cfg or RetrievalConfig()
         with span(
             "rag.retrieve",
@@ -225,7 +289,7 @@ class RAGPipeline:
                 "rag.query_chars": len(query),
             },
         ) as sp:
-            candidates = self._candidates(query, cfg)
+            candidates = self._candidates(query, cfg, sp=sp, use_cache=use_cache)
             sp.set_attribute("rag.candidates", len(candidates))
             if not candidates:
                 return []
@@ -254,9 +318,19 @@ class RAGPipeline:
 
     # ------------------------------------------------------------ 生成
     def answer(self, query: str, cfg: RetrievalConfig | None = None) -> RAGAnswer:
-        """检索 + 带引用生成（相同 query+知识库+检索配置 走结果缓存，省 token）。"""
+        """检索 + 带引用生成（相同 知识库+query+检索配置 走结果缓存，省 token 且省检索）。"""
         cfg = cfg or RetrievalConfig()
         with span("rag.answer", {"kb.name": self.name, "rag.top_k": cfg.top_k, "rag.reranker": cfg.reranker}) as sp:
+            # 回答结果缓存前移到检索之前：命中时真正跳过重复检索（含 query 向量化）
+            cache = get_cache()
+            cache_key = None
+            if cache.enabled:
+                cache_key = ResultCache.make_key(self.name, self._fingerprint, query, cfg.model_dump())
+                cached = cache.get(cache_key)
+                if cached is not None:
+                    sp.set_attribute("rag.cache_hit", True)
+                    return cached
+
             with Timer() as t:
                 chunks = self.retrieve(query, cfg)
             if not chunks:
@@ -264,16 +338,6 @@ class RAGPipeline:
                     answer="知识库中未检索到相关内容。请先上传文档并建库，或换个问法。",
                     latency_ms=t.ms if hasattr(t, "ms") else 0,
                 )
-
-            # 结果缓存：相同 (知识库 + query + 检索配置) 直接返回，避免重复打模型
-            cache = get_cache()
-            cache_key = None
-            if cache.enabled:
-                cache_key = ResultCache.make_key(self.name, query, cfg.model_dump())
-                cached = cache.get(cache_key)
-                if cached is not None:
-                    sp.set_attribute("rag.cache_hit", True)
-                    return cached
 
             context = "\n\n".join(
                 f"[{i + 1}] 来源：{c.source}{' 第' + str(c.page) + '页' if c.page else ''}\n{c.text}"

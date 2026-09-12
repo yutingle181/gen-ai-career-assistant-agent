@@ -16,18 +16,28 @@ sys.path.insert(0, str(ROOT))
 import streamlit as st  # noqa: E402
 
 from src import config  # noqa: E402
+from src.agents.jd_match import DIMENSION_LABELS  # noqa: E402
 from src.cache import get_cost_tracker  # noqa: E402
 from src.embeddings import check_embedding_health  # noqa: E402
 from src.graph.workflow import route_only  # noqa: E402
 from src.llm import check_llm_health  # noqa: E402
 from src.logging_setup import get_logger  # noqa: E402
+from src.models import JDMatchResult  # noqa: E402
 from src.rag.pipeline import RetrievalConfig  # noqa: E402
 from src.rag.registry import get_registry  # noqa: E402
 from src.session import SessionManager  # noqa: E402
 from src.state import MODE_LABELS, MULTI_TURN_MODES  # noqa: E402
 from src.storage import list_outputs, read_output  # noqa: E402
 from src.telemetry import setup_telemetry  # noqa: E402
-from src.ui_style import brand_header, glass_card, inject_style, route_chip, warn_box  # noqa: E402
+from src.ui_style import (  # noqa: E402
+    brand_header,
+    glass_card,
+    inject_style,
+    jd_scorecard_html,
+    route_chip,
+    tool_timeline_html,
+    warn_box,
+)
 
 setup_telemetry()  # 仅当配置了 OTEL_EXPORTER_OTLP_ENDPOINT 时启用导出
 
@@ -49,6 +59,8 @@ EXAMPLES = [
     "我想做一场模拟面试",
     "长沙有哪些 AI 应用工程师岗位",
     "根据知识库回答：切分策略怎么选？",
+    "我的简历和这个岗位 JD 匹配度怎么样？",  # 新场景：JD 匹配诊断
+    "帮我复盘刚才那场面试",  # 新场景：面试复盘
 ]
 
 MODE_OPTIONS = ["(自动路由)"] + [
@@ -167,6 +179,12 @@ def render_sidebar() -> None:
         st.caption("改参数后重新提问即生效；也可在评测面板里做 A-B 对比。")
 
         st.markdown("### 🧪 评测")
+        st.checkbox(
+            "同时跑工具调用 A/B 对比",
+            key="eval_tool_ab",
+            help="在检索质量之外，额外对比「显式检索 vs Function Calling」的延迟、token 成本与轮次。",
+        )
+        st.caption("A/B 会多跑一轮模型调用，耗时更长；需要可用的 API Key。")
         if st.button("▶️ 运行评测并生成报告", use_container_width=True):
             run_eval()
 
@@ -247,7 +265,20 @@ def run_eval() -> None:
 
     with st.spinner(f"正在跑 {len(default_experiments())} 组实验（{len(records)} 条样本）…"):
         results = run_all(pipeline, records, default_experiments(), k=5, with_hallucination=True)
-        path = save_report(results, pipeline, k=5)
+
+    tool_comparison = None
+    if ss.get("eval_tool_ab"):
+        with st.spinner("正在跑双路径 A/B（显式检索 vs Function Calling）…"):
+            try:
+                from src.eval import run_tool_ab
+
+                tool_comparison = run_tool_ab(pipeline, records, kb_name=kb)
+            except Exception as exc:  # noqa: BLE001
+                # A/B 失败不能拖垮主报告：降级为「仅检索质量报告」并如实提示
+                st.warning(f"工具调用对比未完成（{type(exc).__name__}）：{exc}")
+                logger.warning("工具调用 A/B 未完成：%s", exc)
+
+    path = save_report(results, pipeline, k=5, tool_comparison=tool_comparison)
 
     ss.last_artifact = path
     st.success(f"评测完成，报告：{Path(path).name}")
@@ -408,6 +439,25 @@ def _render_streaming_reply(query: str) -> None:
                 unsafe_allow_html=True,
             )
 
+        # 本轮工具调用时间线：仅在开关打开时出现，默认路径下不改变既有观感
+        if config.ENABLE_TOOL_CALLING:
+            events = list(getattr(ss.manager, "tool_events", []) or [])
+            total_ms = sum(int(e.get("elapsed_ms") or 0) for e in events)
+            title = (
+                f"🧩 工具调用过程 · {len(events)} 步 · {total_ms}ms"
+                if events
+                else "🧩 工具调用过程 · 未调用工具，直接作答"
+            )
+            with st.expander(title, expanded=False):
+                st.markdown(tool_timeline_html(events), unsafe_allow_html=True)
+
+        # JD 匹配：结构化结果直接渲染成评分卡（比纯文本更好读，也更像产品）
+        jd_result = getattr(ss.manager.agent, "result", None)
+        if isinstance(jd_result, JDMatchResult):
+            st.markdown(
+                jd_scorecard_html(jd_result, DIMENSION_LABELS), unsafe_allow_html=True
+            )
+
     if ss.manager.artifact_path:
         ss.last_artifact = ss.manager.artifact_path
     ss.messages.append(
@@ -472,7 +522,17 @@ llm_ok, llm_detail, emb_ok, emb_detail = _health()
 brand_header(
     "GenAI Career Assistant",
     "RAG + Agent 职业引擎｜学习 · 简历 · 面试 · 求职",
-    ["教程生成", "答疑问答", "简历制作", "面试真题", "模拟面试", "职位搜索", "知识库问答"],
+    [
+        "教程生成",
+        "答疑问答",
+        "简历制作",
+        "面试真题",
+        "模拟面试",
+        "职位搜索",
+        "知识库问答",
+        "JD 匹配诊断",
+        "面试复盘",
+    ],
     llm_ok and emb_ok,
     "模型已连接" if (llm_ok and emb_ok) else ("模型未配置" if not llm_ok else "Embedding 未就绪"),
 )

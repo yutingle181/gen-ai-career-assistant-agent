@@ -17,6 +17,8 @@ from src.graph.nodes import (  # noqa: E402
 from src.graph.workflow import build_app, graph_mermaid, route_only  # noqa: E402
 from src.state import (  # noqa: E402
     CAT_INTERVIEW,
+    CAT_INTERVIEW_REVIEW,
+    CAT_JD_MATCH,
     CAT_JOB_SEARCH,
     CAT_KNOWLEDGE,
     CAT_LEARNING,
@@ -32,11 +34,22 @@ def test_heuristic_category():
         ("AI 工程师面试会问什么", CAT_INTERVIEW),
         ("长沙有没有 AI 岗位在招", CAT_JOB_SEARCH),
         ("根据我上传的文档回答", CAT_KNOWLEDGE),
+        # 新增场景：更具体的意图必须优先于宽泛的面试/简历规则
+        ("帮我复盘刚才的面试", CAT_INTERVIEW_REVIEW),
+        ("我的简历和这个 JD 匹配度怎么样", CAT_JD_MATCH),
     ]
     for query, expected in cases:
         got, _ = _heuristic_category(query)
         assert got == expected, f"{query} 期望 {expected}，实际 {got}"
     print("[OK] 关键词兜底分类正确")
+
+
+def test_heuristic_specific_intent_beats_broad_rule():
+    """「复盘」「匹配度」不应被宽泛的面试/简历规则截胡。"""
+    assert _heuristic_category("这场面试我哪里答得不好，复盘一下")[0] == CAT_INTERVIEW_REVIEW
+    assert _heuristic_category("这份简历跟岗位要求哪里不匹配")[0] == CAT_JD_MATCH
+    # 裸 "jd" 不触发匹配场景，避免「根据 JD 改写简历」被误判
+    assert _heuristic_category("根据这个 JD 改一下我的简历")[0] == CAT_RESUME
 
 
 def test_route_functions():
@@ -45,6 +58,8 @@ def test_route_functions():
     assert route_query({"category": "interview"}) == "handle_interview_preparation"
     assert route_query({"category": "job_search"}) == "job_search"
     assert route_query({"category": "knowledge"}) == "knowledge_qa"
+    assert route_query({"category": "jd_match"}) == "jd_match"
+    assert route_query({"category": "interview_review"}) == "interview_review"
     assert route_query({"category": "unknown"}) == "fallback"
 
     assert route_learning({"category": "tutorial"}) == "tutorial_agent"

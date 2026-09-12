@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim
 from . import config
 from .agents import create_agent
 from .logging_setup import get_logger, summarize
+from .model_routing import select_model
 from .rag.pipeline import RetrievalConfig
 from .safety import check_high_risk, check_input, safe_output
 from .state import MODE_LABELS
@@ -20,6 +21,27 @@ from .storage import DRAFT_SUFFIX, save_file
 from .telemetry import span
 
 logger = get_logger(__name__)
+
+
+def _user_context_message(text: str) -> SystemMessage:
+    """将 user_context 注入为 SystemMessage。
+
+    开启且模型支持（qwen 系列）且文本足够长时，标记 `cache_control` 让 DashScope
+    对这段稳定前缀做上下文缓存，跳过重复 prefill；否则返回普通字符串 SystemMessage，
+    行为与改动前完全一致。
+    """
+    enabled = (
+        config.ENABLE_PROMPT_CACHE
+        and config.MODEL_NAME.lower().startswith(config.PROMPT_CACHE_MODELS)
+        and len(text) >= config.PROMPT_CACHE_MIN_CHARS
+    )
+    if enabled:
+        return SystemMessage(
+            content=[
+                {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+            ]
+        )
+    return SystemMessage(content=text)
 
 
 class SessionManager:
@@ -38,6 +60,15 @@ class SessionManager:
         # 用户档案（岗位 JD + 关联简历），由后端注入；为空时行为与之前完全一致
         self.user_context = user_context or ""
         self.agent = create_agent(mode, kb_name=kb_name, retrieval_cfg=retrieval_cfg)
+        # 把「用户档案是否可用」直接交给 Agent，供 JD 匹配 / 面试复盘等场景
+        # 在缺少岗位与简历时给出明确降级提示（而非凭空编造结论）。
+        self.agent.extra_context = self.user_context
+        # ---- 工具调用过程（Function Calling 路径）----
+        # Agent 每次调用工具都会向此列表追加一条过程事件，供 API / UI 按序透出，
+        # 让「模型正在调用什么工具」对用户可见；默认（ENABLE_TOOL_CALLING=false）下
+        # 该列表始终为空，既有行为零变化。
+        self.tool_events: list[dict] = []
+        self.agent.tool_event_listener = self.tool_events.append
         self.history: list = []
         self.record: list[str] = []
         self.started = False
@@ -51,8 +82,17 @@ class SessionManager:
         self._confirmed = False  # 是否已人工确认过
 
     # ------------------------------------------------------------ 生命周期
+    def reset_tool_events(self) -> None:
+        """开启新一轮前清空过程事件。
+
+        工具调用时间线只描述**当前这一轮**：若不清空，多轮会话会把上一轮的
+        步骤混进来，界面看起来像「这一轮调用了很多工具」，与事实不符。
+        """
+        self.tool_events.clear()
+
     def start(self, user_query: str) -> str:
         """首轮：准备上下文 -> 生成 -> 一次性模式自动收尾。"""
+        self.reset_tool_events()
         ok, reason = check_input(user_query)
         if not ok:
             self.error = reason
@@ -77,6 +117,7 @@ class SessionManager:
         if not self.started:
             return self.start(user_text)
 
+        self.reset_tool_events()
         ok, reason = check_input(user_text)
         if not ok:
             return f"（{reason}）"
@@ -87,8 +128,14 @@ class SessionManager:
         self.history.append(HumanMessage(content=user_text))
         return self._generate()
 
-    def start_stream(self, user_query: str):
-        """首轮（流式版）：与 start() 流程一致，只是逐段产出文本。"""
+    def start_stream(self, user_query: str, *, auto_finish: bool = True):
+        """首轮（流式版）：与 start() 流程一致，只是逐段产出文本。
+
+        `auto_finish=False` 供 API 流式网关使用：API 侧由用户显式点击「导出 / 确认」
+        才收尾，因此这里只推进一轮，不自动落盘。除此之外流程与默认完全一致，
+        保证「同一套会话逻辑同时服务 Streamlit 与 API」这一约定不被破坏。
+        """
+        self.reset_tool_events()
         ok, reason = check_input(user_query)
         if not ok:
             self.error = reason
@@ -103,18 +150,19 @@ class SessionManager:
         self.started = True
 
         yield from self._generate_stream()
-        if self.agent.one_shot:
+        if auto_finish and self.agent.one_shot:
             self.finish()
 
-    def step_stream(self, user_text: str):
+    def step_stream(self, user_text: str, *, auto_finish: bool = True):
         """后续轮（流式版）：与 step() 流程一致，只是逐段产出文本。"""
         if self.finished:
             yield "本轮会话已结束并导出。如需继续，请点击「新建会话」。"
             return
         if not self.started:
-            yield from self.start_stream(user_text)
+            yield from self.start_stream(user_text, auto_finish=auto_finish)
             return
 
+        self.reset_tool_events()
         ok, reason = check_input(user_text)
         if not ok:
             yield f"（{reason}）"
@@ -213,6 +261,16 @@ class SessionManager:
         return self.artifact_path
 
     # ------------------------------------------------------------ 内部
+    def _max_tokens_for(self) -> int | None:
+        """按当前 mode 取输出 token 上限（控制生成长度 9.2.A）。
+
+        开关关闭时返回 None，使 get_chat_model 不传 max_tokens，行为零回归；
+        开关开启时优先用 mode 覆盖值，否则全局兜底 MAX_TOKENS。
+        """
+        if not config.ENABLE_MAX_TOKENS:
+            return None
+        return config.MAX_TOKENS_BY_MODE.get(self.mode, config.MAX_TOKENS)
+
     def _generate(self) -> str:
         with span(
             "agent.respond",
@@ -223,8 +281,14 @@ class SessionManager:
             },
         ) as sp:
             trimmed = self._trim_history()
+            model = select_model(
+                query=trimmed[-1].content if trimmed else "",
+                mode=self.mode,
+                user_context=self.user_context,
+            )
+            max_tokens = self._max_tokens_for()
             try:
-                reply = self.agent.respond(trimmed)
+                reply = self.agent.respond(trimmed, model=model, max_tokens=max_tokens)
             except Exception as exc:  # noqa: BLE001
                 sp.set_attribute("error", True)
                 sp.set_attribute("error.type", type(exc).__name__)
@@ -255,9 +319,15 @@ class SessionManager:
             },
         ) as sp:
             trimmed = self._trim_history()
+            model = select_model(
+                query=trimmed[-1].content if trimmed else "",
+                mode=self.mode,
+                user_context=self.user_context,
+            )
+            max_tokens = self._max_tokens_for()
             buffer: list[str] = []
             try:
-                for piece in self.agent.respond_stream(trimmed):
+                for piece in self.agent.respond_stream(trimmed, model=model, max_tokens=max_tokens):
                     if not piece:
                         continue
                     buffer.append(piece)
@@ -298,7 +368,7 @@ class SessionManager:
                 )
             )
         if self.user_context:
-            trimmed.insert(0, SystemMessage(content=self.user_context))
+            trimmed.insert(0, _user_context_message(self.user_context))
         return trimmed
 
     # ------------------------------------------------------------ 只读属性

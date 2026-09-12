@@ -13,6 +13,8 @@ CAT_RESUME = "resume"
 CAT_INTERVIEW = "interview"
 CAT_JOB_SEARCH = "job_search"
 CAT_KNOWLEDGE = "knowledge"
+CAT_JD_MATCH = "jd_match"
+CAT_INTERVIEW_REVIEW = "interview_review"
 CAT_FALLBACK = "fallback"
 
 # 会话模式
@@ -23,6 +25,8 @@ MODE_INTERVIEW_QUESTIONS = "interview_questions"
 MODE_MOCK_INTERVIEW = "mock_interview"
 MODE_JOB_SEARCH = "job_search"
 MODE_KNOWLEDGE = "knowledge"
+MODE_JD_MATCH = "jd_match"
+MODE_INTERVIEW_REVIEW = "interview_review"
 MODE_FALLBACK = "fallback"
 
 MODE_LABELS = {
@@ -33,6 +37,8 @@ MODE_LABELS = {
     MODE_MOCK_INTERVIEW: "模拟面试",
     MODE_JOB_SEARCH: "职位搜索",
     MODE_KNOWLEDGE: "知识库问答",
+    MODE_JD_MATCH: "JD 匹配诊断",
+    MODE_INTERVIEW_REVIEW: "面试复盘",
     MODE_FALLBACK: "未识别",
 }
 

@@ -16,9 +16,9 @@ from pydantic import BaseModel, Field
 class CategoryResult(BaseModel):
     """一级分类结果。"""
 
-    category: Literal["learning", "resume", "interview", "job_search", "knowledge"] = Field(
-        description="查询所属的一级类别"
-    )
+    category: Literal[
+        "learning", "resume", "interview", "job_search", "knowledge", "jd_match", "interview_review"
+    ] = Field(description="查询所属的一级类别")
     reason: str = Field(default="", description="一句话分类依据，便于排障与界面展示")
 
 
@@ -92,6 +92,31 @@ class InterviewEval(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     improvements: list[str] = Field(default_factory=list)
     suggestion: str = ""
+
+
+class JDMatchResult(BaseModel):
+    """JD 匹配诊断结果（界面按「评分卡 + 双栏对照」渲染）。"""
+
+    total_score: int = Field(default=0, ge=0, le=100, description="0-100 总分")
+    dimension_scores: dict[str, int] = Field(
+        default_factory=dict,
+        description="分项得分，键固定为 skills / experience / education / projects",
+    )
+    matched: list[str] = Field(default_factory=list, description="命中项")
+    gaps: list[str] = Field(default_factory=list, description="缺口项")
+    interview_focus: list[str] = Field(default_factory=list, description="面试准备重点")
+    summary: str = Field(default="", description="一句话结论")
+
+
+class InterviewReview(BaseModel):
+    """面试复盘结果（字段与前端复盘视图对齐，避免第二条重复链路）。"""
+
+    overall: int = Field(default=0, ge=0, le=100, description="总体表现分")
+    dimensions: dict[str, int] = Field(default_factory=dict, description="分项得分")
+    question_chain: list[str] = Field(default_factory=list, description="追问链还原")
+    weaknesses: list[str] = Field(default_factory=list, description="薄弱点")
+    suggestions: list[str] = Field(default_factory=list, description="改进动作")
+    detail: str = Field(default="", description="整体点评")
 
 
 class ResumeSection(BaseModel):

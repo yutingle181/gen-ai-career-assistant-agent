@@ -18,6 +18,8 @@ from src.safety import check_high_risk
 from src.session import SessionManager
 from src.state import (
     MODE_INTERVIEW_QUESTIONS,
+    MODE_INTERVIEW_REVIEW,
+    MODE_JD_MATCH,
     MODE_JOB_SEARCH,
     MODE_KNOWLEDGE,
     MODE_MOCK_INTERVIEW,
@@ -44,13 +46,16 @@ def out_dir(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------- 场景打标
-@pytest.mark.parametrize("mode", [MODE_RESUME, MODE_MOCK_INTERVIEW, MODE_JOB_SEARCH])
+@pytest.mark.parametrize(
+    "mode", [MODE_RESUME, MODE_MOCK_INTERVIEW, MODE_JOB_SEARCH, MODE_JD_MATCH]
+)
 def test_high_risk_agents_require_confirmation(mode):
     assert create_agent(mode).requires_confirmation is True
 
 
 @pytest.mark.parametrize(
-    "mode", [MODE_TUTORIAL, MODE_QA, MODE_INTERVIEW_QUESTIONS, MODE_KNOWLEDGE]
+    "mode",
+    [MODE_TUTORIAL, MODE_QA, MODE_INTERVIEW_QUESTIONS, MODE_KNOWLEDGE, MODE_INTERVIEW_REVIEW],
 )
 def test_normal_agents_do_not_require_confirmation(mode):
     """内容生成类场景不打标，避免确认流程影响演示流畅度。"""
