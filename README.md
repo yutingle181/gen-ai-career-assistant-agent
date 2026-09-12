@@ -2,7 +2,7 @@
 
 > 当前版本 **v1.1.0** · 变更记录见 [§十](#十版本与变更记录)
 
-![GenAI 职业助手创意海报](../jobseeker/docs/portfolio/assets/genai-career-assistant-poster.png)
+![GenAI 职业助手创意海报](docs/poster.png)
 
 一个**可运行、可演示、可度量**的 GenAI 职业助手工程：左边是「LangGraph 多 Agent 职业助手」（教程 / 答疑 / 简历 / 面试题 / 模拟面试 / 职位搜索 / **JD 匹配诊断** / **面试复盘**），右边是「企业知识库 RAG 引擎」（上传文档 → 混合检索 → 重排 → 带引用问答）。对外同时提供 **Streamlit 演示界面**与 **FastAPI 服务接口**，并内置 **效果评测体系**（Recall@5 / MRR / 命中率 / 幻觉率 + A-B 对比报告），以及**显式检索 vs Function Calling 双路径 A/B**。
 
