@@ -93,9 +93,16 @@ def test_get_agent_tools_includes_web_and_kb(monkeypatch):
 
 
 def test_get_agent_tools_web_import_failure_keeps_kb(monkeypatch):
+    # langchain_community >=0.3 将工具类放到子模块，顶层包通过 __getattr__ 懒加载，
+    # 直接 delattr 顶层包会失败；改为从实际子模块删除，让 import 真正失败。
     import langchain_community.tools as lct
+    import langchain_community.tools.ddg_search.tool as ddg_tool
 
-    monkeypatch.delattr(lct, "DuckDuckGoSearchResults", raising=True)
+    # pytest.setattr 在懒加载模块上会记录原始值并在 teardown 时还原到顶层 __dict__，
+    # 因此测试前必须同时清除顶层缓存和子模块属性。
+    if "DuckDuckGoSearchResults" in lct.__dict__:
+        monkeypatch.delattr(lct, "DuckDuckGoSearchResults", raising=False)
+    monkeypatch.delattr(ddg_tool, "DuckDuckGoSearchResults", raising=True)
     got = tools.get_agent_tools("some_kb")
     assert len(got) == 1  # 仅知识库工具
 
