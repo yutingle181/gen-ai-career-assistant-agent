@@ -371,4 +371,4 @@ tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会�
 
 ### v1.0.0
 
-- LangGraph 多 Agent 工作流 + 企业知识库 RAG（混合检索 / RRF / 双 Rerank）+ 评测体系（Recall@K / MRR / HitRate / 幻觉率）+ 人机协同（草稿→确认→定稿）+ 分级模型路由与 Prompt 缓存。
+- LangGraph 多 Agent 工作流 + 企业知识库 RAG（混合检索 / RRF / 双 Rerank）+ 评测体系（Recall@K / MRR / HitRate / 幻觉率）+ 人机协同（草稿→确认→定稿）+ 分级模型路由与 Prompt 缓存 。
