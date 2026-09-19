@@ -160,11 +160,35 @@ WEB_SEARCH_ALT_BACKEND: str = os.getenv("WEB_SEARCH_ALT_BACKEND", "text").strip(
 WEB_SEARCH_SIMPLIFY_CHARS: int = _int("WEB_SEARCH_SIMPLIFY_CHARS", 60)
 # 数据时效（P0-3）：给工具结果注入抓取时间，供 Prompt 判断资料新鲜度
 ENABLE_FETCH_TIME: bool = _bool("ENABLE_FETCH_TIME", True)
+# 过期阈值：超过该天数的资料会被工具标注「可能已过期」。
+# 为什么由工具算而不是让模型算：模型没有时钟、也不擅长日期减法，
+# 「距今 1236 天」这种结论式标注的遵守率明显高于只给一个日期。默认 1 年。
+FRESHNESS_STALE_DAYS: int = _int("FRESHNESS_STALE_DAYS", 365)
+# 一次检索内资料时间跨度超过该天数时，提示「可能来自不同版本」
+FRESHNESS_SPAN_DAYS: int = _int("FRESHNESS_SPAN_DAYS", 180)
 # 工具熔断（P2-7）：重试解决「单次抖动」，不解决「上游整体挂了」。
 # 连续失败到阈值后，冷却期内直接短路（不再打上游），把成倍的等待时间换成立刻如实告知。
 ENABLE_TOOL_CIRCUIT_BREAKER: bool = _bool("ENABLE_TOOL_CIRCUIT_BREAKER", True)
 TOOL_BREAKER_THRESHOLD: int = _int("TOOL_BREAKER_THRESHOLD", 3)
 TOOL_BREAKER_COOLDOWN: int = _int("TOOL_BREAKER_COOLDOWN", 60)
+
+# ---------------------------------------------------------------- 任务生命周期（取消 / 排队）
+# 排队上限：超出的请求立刻 429，而不是无限期挂着（限流按 IP 计数，解决不了
+# 「一个客户端并发打满队列」的问题）。
+API_MAX_QUEUE: int = _int("API_MAX_QUEUE", 8)
+# 单个请求最多排队等待多少秒；超时返回 503，让调用方拿到明确结论而不是一直等
+API_QUEUE_TIMEOUT: float = _float("API_QUEUE_TIMEOUT", 60.0)
+
+# ---------------------------------------------------------------- 故障注入（演示 / 评测用）
+# 默认关闭。打开后按概率给指定工具注入模拟故障，用来验证「失败分级 / 熔断 / Failure Onset」
+# 在真出问题时确实生效——这三块在 happy path 上永远是 0 失败，证明不了任何东西。
+# 固定种子保证同一批输入得到同一串故障；并发会打乱调用顺序，注入实验请串行（--workers 1）。
+ENABLE_FAULT_INJECTION: bool = _bool("ENABLE_FAULT_INJECTION", False)
+FAULT_INJECT_TOOL: str = os.getenv("FAULT_INJECT_TOOL", "knowledge_search").strip()
+# 取值：http_5xx / http_4xx / timeout / empty（empty = 正常返回但没结果，与报错语义不同）
+FAULT_INJECT_KIND: str = os.getenv("FAULT_INJECT_KIND", "http_5xx").strip().lower()
+FAULT_INJECT_RATE: float = _float("FAULT_INJECT_RATE", 0.0)
+FAULT_INJECT_SEED: int = _int("FAULT_INJECT_SEED", 42)
 ENABLE_CACHE: bool = _bool("ENABLE_CACHE", True)
 
 # ---------------------------------------------------------------- 可恢复性（P1-4）

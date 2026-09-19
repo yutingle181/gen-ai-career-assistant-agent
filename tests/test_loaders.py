@@ -20,6 +20,23 @@ def test_load_text_file(tmp_path):
     assert "纯文本" in docs[0].text
 
 
+def test_load_file_records_updated_at(tmp_path):
+    """入库时必须记下文件时间。
+
+    否则资料时效只能靠「源文件还在不在」反推：文件一旦被移走 / 清理，
+    片段时间就永久变成「未知」，答案也就再也无法声明资料时间。
+    """
+    from src.freshness import chunk_time
+
+    p = tmp_path / "note.md"
+    p.write_text("# 标题\n内容", encoding="utf-8")
+
+    docs = load_file(p)
+
+    assert docs[0].meta.get("updated_at")
+    assert chunk_time(docs[0]) != "未知"
+
+
 def test_load_markdown_file(tmp_path):
     p = tmp_path / "doc.md"
     p.write_text("# 标题\n内容", encoding="utf-8")

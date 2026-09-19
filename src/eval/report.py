@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
-from .. import config
+from .. import config, faults
 from ..logging_setup import get_logger
 from ..models import MetricResult
 from ..rag.pipeline import RAGPipeline
@@ -48,8 +48,29 @@ def render_report(
             f"- 知识库：`{stats.get('name')}`（{stats.get('chunks')} 片段 / "
             f"{stats.get('sources')} 份文档 / 维度 {stats.get('dim')}）"
         )
+        # 资料过期是**数据问题**：把它印在报告最前面，才能变成「该更新文档了」的行动项，
+        # 而不是等模型在答案里替我们声明「资料可能已过期」。
+        fresh = stats.get("freshness") or {}
+        if fresh.get("total"):
+            lines.append(
+                f"- 资料新鲜度：过期 {fresh.get('stale', 0)} / 时间未知 {fresh.get('unknown', 0)}"
+                f" / 新鲜 {fresh.get('fresh', 0)}（共 {fresh['total']} 个片段，"
+                f"阈值 {config.FRESHNESS_STALE_DAYS} 天）"
+            )
     lines += [
         f"- 评测样本：{sample_count or (results[0].sample_count if results else 0)} 条",
+    ]
+    # 故障注入实验必须在报告最显眼处标注：否则读者会把「降级下的数据」当成系统真实水平，
+    # 那比没有数据更糟——它会让人据此做出错误结论。
+    injection = faults.describe() if faults.is_enabled() else {}
+    if injection:
+        lines += [
+            "",
+            f"> **本次为故障注入实验**：工具 `{injection['tool']}` 注入 `{injection['kind']}`，"
+            f"失败概率 {injection['rate']:.0%}（种子 {injection['seed']}）。"
+            "数据反映的是**降级路径**行为，不代表系统真实水平。",
+        ]
+    lines += [
         "",
         "## 1. 指标口径",
         "",
@@ -101,6 +122,8 @@ def render_report(
         }
     if trajectory:
         snapshot["trajectory"] = trajectory
+    if injection:
+        snapshot["fault_injection"] = injection
     lines.append(json.dumps(snapshot, ensure_ascii=False, indent=2))
     lines += ["```", ""]
     return "\n".join(lines)

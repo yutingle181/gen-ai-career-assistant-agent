@@ -150,6 +150,7 @@ def run_with_tools(
     max_steps: int | None = None,
     on_event: ToolEventListener | None = None,
     thread_id: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> str:
     """在轮次上限内完成「模型 → 工具 → 模型」闭环，返回最终自然语言回答。
 
@@ -159,6 +160,9 @@ def run_with_tools(
     `thread_id`（通常是「会话 id + 轮次」）用于挂图级 checkpoint：
     同一 thread 再次调用会复用/续跑已有状态，而不是重新执行工具。
     不传则完全不启用 checkpoint，行为与改动前一致。
+
+    `should_stop` 是协作式取消信号，在**工具轮次之间**检查：
+    用户点了停止 / 关了页面时，没必要把「明知没人看」的后续轮次跑完 —— 那是用户的额度。
     """
     if not tools:
         return llm_invoke(messages, model=model, max_tokens=max_tokens)
@@ -236,6 +240,12 @@ def run_with_tools(
         last = state["messages"][-1]
         if not (getattr(last, "tool_calls", None) or []):
             return END
+        if should_stop is not None and should_stop():
+            # 取消检查点放在「要调工具之前」：模型已决定继续，但用户已经走了。
+            # 直接结束而不是走 finalize —— 取消不该再花一次模型调用去「收个尾」。
+            logger.info("收到取消信号，停止工具闭环（已执行 %d 轮）", int(state.get("steps", 0)))
+            metrics.incr("agent.cancelled")
+            return END
         if int(state.get("steps", 0)) >= limit:
             logger.warning("工具调用达到上限 %d 轮，强制收束为直接作答", limit)
             metrics.incr("agent.step_limit")
@@ -298,6 +308,7 @@ def stream_with_tools(
     on_event: ToolEventListener | None = None,
     chunk_size: int = 24,
     thread_id: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ):
     """工具调用路径的流式外壳：先跑完闭环，再分片吐出最终答案。
 
@@ -305,6 +316,9 @@ def stream_with_tools(
     流式收益有限，反而会让「哪些分片属于过程说明、哪些属于最终答案」变得不可控。
     因此这里诚实地选择「闭环后分片输出」——用户看到的是稳定的渐显效果，
     真正的过程可见性由 `on_event` 透出的工具调用时间线承担（前端与 Streamlit 展示）。
+
+    `should_stop` 透传给闭环（轮次之间检查），同时用于**分片推送**的提前退出：
+    取消后继续往外推字，只会让用户看到「明明点了停止还在输出」。
     """
     text = run_with_tools(
         messages,
@@ -314,6 +328,9 @@ def stream_with_tools(
         max_steps=max_steps,
         on_event=on_event,
         thread_id=thread_id,
+        should_stop=should_stop,
     )
     for start in range(0, len(text), max(1, chunk_size)):
+        if should_stop is not None and should_stop():
+            return
         yield text[start : start + max(1, chunk_size)]

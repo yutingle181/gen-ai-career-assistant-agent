@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from ..logging_setup import get_logger
@@ -54,8 +55,21 @@ def _load_html(path: Path) -> list[RawDocument]:
     return [RawDocument(source=path.name, text=text)] if text.strip() else []
 
 
+def _file_time(path: Path) -> str:
+    """文件最后修改时间（入库时写进 meta，供数据时效判断）。
+
+    为什么要显式记录：此前片段时间只能靠「源文件还在不在」反推，
+    文件被移走 / 清理后，时效就**永久变成「未知」**，答案也就再也无法声明资料时间。
+    入库时记一次，此后与源文件是否还在无关。
+    """
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+    except OSError:
+        return ""
+
+
 def load_file(path: str | Path) -> list[RawDocument]:
-    """按后缀分发解析器。"""
+    """按后缀分发解析器；解析结果会带上文件时间（`meta["updated_at"]`）。"""
     p = Path(path)
     suffix = p.suffix.lower()
     if suffix not in SUPPORTED_SUFFIX:
@@ -63,15 +77,22 @@ def load_file(path: str | Path) -> list[RawDocument]:
         return []
     try:
         if suffix == ".pdf":
-            return _load_pdf(p)
-        if suffix == ".docx":
-            return _load_docx(p)
-        if suffix in {".html", ".htm"}:
-            return _load_html(p)
-        return _load_text(p)
+            docs = _load_pdf(p)
+        elif suffix == ".docx":
+            docs = _load_docx(p)
+        elif suffix in {".html", ".htm"}:
+            docs = _load_html(p)
+        else:
+            docs = _load_text(p)
     except Exception as exc:  # noqa: BLE001
         logger.error("解析失败 %s：%s", p.name, exc)
         return []
+
+    stamp = _file_time(p)
+    if stamp:
+        for doc in docs:
+            doc.meta.setdefault("updated_at", stamp)
+    return docs
 
 
 def load_dir(directory: str | Path, recursive: bool = True) -> list[RawDocument]:

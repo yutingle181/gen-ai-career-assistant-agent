@@ -152,6 +152,31 @@ def _safe_run(runner: PathRunner, record) -> PathOutcome:
     return outcome if isinstance(outcome, PathOutcome) else PathOutcome(ok=False)
 
 
+def _trajectory_block(explicit_outs: Sequence[PathOutcome], tool_outs: Sequence[PathOutcome]) -> dict:
+    """轨迹指标：实验组按场景口径统计，对照组另附「降级与失败定位」。
+
+    为什么必须把对照组也报出来：显式检索是生产默认路径，一旦上游整体挂掉，
+    只统计 FC 路径会得出「工具失败率 0%、无失败步」的假结论 ——
+    本次故障注入（15/15 次检索全部失败）正好撞上这个失真：报告看起来一切正常。
+    对照路径**只报降级与 Failure Onset**，不判定答案成功率：它的答案是自由文本、
+    没有引用编号契约，硬套场景标记会得到一个会被误读的 0%。
+    """
+    tool_stats = stats_from_outcomes(
+        tool_outs, mode=MODE_QA, max_steps=config.TOOL_CALLING_MAX_STEPS
+    ).to_dict()
+    explicit_stats = stats_from_outcomes(
+        explicit_outs, mode=MODE_QA, max_steps=config.TOOL_CALLING_MAX_STEPS
+    )
+    tool_stats["explicit_degradation"] = {
+        "samples": explicit_stats.samples,
+        "tool_failure_rate": explicit_stats.tool_failure_rate,
+        "avg_failure_onset": explicit_stats.avg_failure_onset,
+        "failure_onset_hist": {str(k): v for k, v in explicit_stats.failure_onset_hist.items()},
+        "note": "对照路径按「检索是否降级」统计，不判定答案成功率",
+    }
+    return tool_stats
+
+
 def compare_paths(
     records: Sequence[object],
     explicit_runner: PathRunner,
@@ -176,11 +201,9 @@ def compare_paths(
         explicit=summarize_path(PATH_EXPLICIT, explicit_outs, config_snapshot=explicit_config),
         tool_calling=summarize_path(PATH_TOOL_CALLING, tool_outs, config_snapshot=tool_config),
         sample_count=len(records),
-        # 轨迹级指标只统计实验组：显式路径没有「多轮 + 工具事件」可言，
-        # 把它并进同一张表会得到一个恒定的假轨迹（固定 1 轮、0 次工具）。
-        trajectory=stats_from_outcomes(
-            tool_outs, mode=MODE_QA, max_steps=config.TOOL_CALLING_MAX_STEPS
-        ).to_dict(),
+        # 主表仍是实验组口径（显式路径没有「多轮」可言，并进同一张表会得到恒定假轨迹），
+        # 但对照组的降级情况单列出来 —— 否则检索整体挂掉时报告会显示「一切正常」。
+        trajectory=_trajectory_block(explicit_outs, tool_outs),
     )
     logger.info(
         "双路径对比完成 | 样本=%d | 显式 %.0fms/%.0ftoken | 工具调用 %.0fms/%.0ftoken | 工具调用率 %.0f%%",
@@ -213,14 +236,25 @@ def make_explicit_runner(
 
         from ..llm import llm_invoke
         from ..prompts.personas import get_persona
+        from ..tools import degraded_text, retrieve_with_grade
 
         system = persona or get_persona(MODE_QA)
         question = getattr(record, "question", str(record))
         invoke = llm or llm_invoke
 
         start = time.perf_counter()
-        chunks = pipeline.retrieve(question, retrieval_cfg, use_cache=False)
-        context = "\n\n".join(getattr(c, "text", "") for c in chunks)
+        # 与工具路径共用同一份「检索 + 失败分级 + 如实降级」实现：
+        # 此前这里直接调 pipeline.retrieve()，一旦上游抛错整条样本就崩，
+        # 或者静默拿到空上下文 —— 模型会把「没查成」当成「知识库里没有」。
+        ok, chunks, kind = retrieve_with_grade(
+            pipeline, question, retrieval_cfg, use_cache=False
+        )
+        events: list[dict] = []
+        if ok:
+            context = "\n\n".join(getattr(c, "text", "") for c in chunks)
+        else:
+            context = degraded_text(kind, channel="kb")
+            events.append({"name": "knowledge_search", "ok": False, "error_kind": kind})
         prompt = f"{question}\n\n【检索结果】\n{context}"
         answer = invoke(
             [SystemMessage(content=system), HumanMessage(content=prompt)], model=model
@@ -236,6 +270,7 @@ def make_explicit_runner(
             tool_calls=1,  # 显式路径的「一次检索」即其工具调用
             citations=[getattr(c, "chunk_id", "") for c in chunks],
             text=answer or "",
+            events=events,
         )
 
     return _run

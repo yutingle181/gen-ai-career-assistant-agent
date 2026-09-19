@@ -110,11 +110,63 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="A/B 时不装配联网检索工具（仅知识库检索，更省更稳）",
     )
+    parser.add_argument(
+        "--skip-rag",
+        action="store_true",
+        help="跳过 4 组检索实验，只跑工具 A/B（故障注入等场景下省时省 token）",
+    )
+    parser.add_argument(
+        "--fault-tool",
+        default="",
+        help="故障注入：给哪个工具注入模拟故障（knowledge_search / search_web），留空即关闭",
+    )
+    parser.add_argument(
+        "--fault-kind",
+        default="http_5xx",
+        help="注入的故障类型：http_5xx / http_4xx / timeout / empty（empty=正常返回但没结果）",
+    )
+    parser.add_argument(
+        "--fault-rate",
+        type=float,
+        default=0.0,
+        help="每次工具调用的失败概率（0~1）；不填或 0 视为 1.0（全失败）",
+    )
+    parser.add_argument(
+        "--fault-seed",
+        type=int,
+        default=0,
+        help="注入随机种子（固定后同批输入复现同一串故障；注入实验请配 --workers 1）",
+    )
     return parser
+
+
+def apply_fault_injection(args) -> None:
+    """把 CLI 的注入参数落到 config，并打一条显眼警告。
+
+    之所以要在建库/评测之前就设好：报告快照会记录注入配置。
+    「这份报告是在 100% 知识库检索失败下跑出来的」必须写在报告里，
+    否则读者会把降级数据当成系统真实水平 —— 那是比没有数据更糟的事。
+    """
+    if not getattr(args, "fault_tool", ""):
+        return
+    config.ENABLE_FAULT_INJECTION = True
+    config.FAULT_INJECT_TOOL = args.fault_tool
+    config.FAULT_INJECT_KIND = args.fault_kind
+    config.FAULT_INJECT_RATE = args.fault_rate if args.fault_rate > 0 else 1.0
+    if args.fault_seed:
+        config.FAULT_INJECT_SEED = args.fault_seed
+    print(
+        "\n" + "*" * 72
+        + f"\n故障注入已启用：工具={config.FAULT_INJECT_TOOL} 类型={config.FAULT_INJECT_KIND} "
+        f"概率={config.FAULT_INJECT_RATE:.0%} 种子={config.FAULT_INJECT_SEED}"
+        "\n这是用于验证**失败路径**的实验，数据反映降级行为，不是系统真实水平"
+        "\n" + "*" * 72 + "\n"
+    )
 
 
 def main() -> int:
     args = build_parser().parse_args()
+    apply_fault_injection(args)
 
     registry = get_registry()
     pipeline = registry.get_or_create(args.kb)
@@ -149,27 +201,33 @@ def main() -> int:
         print("评测集为空，无法评测。")
         return 1
 
-    experiments = default_experiments(include_api_rerank=args.api_rerank)
     workers = args.workers if args.workers > 0 else config.EVAL_MAX_WORKERS
-    print(f"\n开始跑 {len(experiments)} 组实验，共 {len(records)} 条样本，并发 {workers}…\n")
-    results = run_all(
-        pipeline,
-        records,
-        experiments,
-        k=args.top_k,
-        with_hallucination=not args.no_judge,
-        max_workers=workers,
-    )
-
-    print("\n" + "=" * 72)
-    print(f"{'实验组':<24}{'Recall@' + str(args.top_k):>10}{'MRR':>10}{'HitRate':>10}{'延迟ms':>10}")
-    print("=" * 72)
-    for r in results:
-        print(
-            f"{r.name:<24}{r.recall_at_k * 100:>9.1f}%{r.mrr:>10.3f}"
-            f"{r.hit_rate * 100:>9.1f}%{r.avg_latency_ms:>10}"
+    results: list = []
+    if args.skip_rag:
+        # 故障注入实验只关心工具链路的降级行为，检索实验组（4 组 × 全量样本 + 幻觉判定）
+        # 既慢又费 token，因此允许单独跑 A/B；报告会如实标注本次不含检索质量表。
+        print("\n--skip-rag：跳过检索实验组，只跑工具 A/B（本次报告不含检索质量表）")
+    else:
+        experiments = default_experiments(include_api_rerank=args.api_rerank)
+        print(f"\n开始跑 {len(experiments)} 组实验，共 {len(records)} 条样本，并发 {workers}…\n")
+        results = run_all(
+            pipeline,
+            records,
+            experiments,
+            k=args.top_k,
+            with_hallucination=not args.no_judge,
+            max_workers=workers,
         )
-    print("=" * 72)
+
+        print("\n" + "=" * 72)
+        print(f"{'实验组':<24}{'Recall@' + str(args.top_k):>10}{'MRR':>10}{'HitRate':>10}{'延迟ms':>10}")
+        print("=" * 72)
+        for r in results:
+            print(
+                f"{r.name:<24}{r.recall_at_k * 100:>9.1f}%{r.mrr:>10.3f}"
+                f"{r.hit_rate * 100:>9.1f}%{r.avg_latency_ms:>10}"
+            )
+        print("=" * 72)
 
     tool_comparison = None
     if args.tool_ab:

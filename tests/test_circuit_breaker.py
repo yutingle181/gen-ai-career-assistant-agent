@@ -90,6 +90,6 @@ def test_success_resets_failure_count(monkeypatch):
 # ------------------------------------------------------------------ 用户可见文案
 def test_circuit_open_message_is_actionable():
     """熔断提示必须能被写进答案：说明「没拿到外部资料」且要求声明未联网核实。"""
-    text = tools._degraded_text("circuit_open")
+    text = tools.degraded_text("circuit_open")
     assert tools.degraded_kind(text) == "circuit_open"
     assert "熔断中" in text and "未联网核实" in text
