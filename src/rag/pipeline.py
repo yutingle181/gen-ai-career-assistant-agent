@@ -176,6 +176,8 @@ class RAGPipeline:
         return self.store is not None and len(self.chunks) > 0
 
     def stats(self) -> dict:
+        from ..freshness import audit, chunk_time
+
         return {
             "name": self.name,
             "chunks": len(self.chunks),
@@ -183,6 +185,9 @@ class RAGPipeline:
             "has_vector": self.store is not None,
             "has_bm25": self.bm25 is not None,
             "sources": len({c.source for c in self.chunks}),
+            # 数据侧新鲜度：资料过期是**数据问题**，不能只靠 prompt 让模型自觉声明。
+            # 这里如实给出「过期 / 未知 / 新鲜」的片段数，让「该更新文档了」变成可行动的信号。
+            "freshness": audit([chunk_time(c) for c in self.chunks]),
         }
 
     # ------------------------------------------------------------ 检索
@@ -258,6 +263,8 @@ class RAGPipeline:
                 score=float(score),
                 vector_rank=info.get("vector_rank"),
                 bm25_rank=info.get("bm25_rank"),
+                # 元信息要一路带到工具层：数据时效判断依赖它（否则只能靠源文件反推）
+                meta=dict(getattr(c, "meta", {}) or {}),
             )
             for c, score, info in fused
         ]
@@ -311,6 +318,7 @@ class RAGPipeline:
                         page=chunk.page,
                         score=float(score),
                         rerank_score=float(score),
+                        meta=dict(getattr(chunk, "meta", {}) or {}),
                     )
                     final.append(rc)
             sp.set_attribute("rag.results", len(final))

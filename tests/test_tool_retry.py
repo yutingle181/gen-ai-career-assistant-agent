@@ -135,13 +135,13 @@ def test_search_plan_order_and_alt_backend(monkeypatch):
 def test_degraded_marker_round_trip():
     """降级文本必须能解析回失败分类（事件流与指标都依赖这个契约）。"""
     for kind in ("timeout", "http_5xx", "http_4xx", "empty", "unknown"):
-        text = tools._degraded_text(kind)
+        text = tools.degraded_text(kind)
         assert text.startswith(tools.DEGRADED_MARK)
         assert tools.degraded_kind(text) == kind
 
     assert tools.degraded_kind("正常检索结果") == ""
-    assert "暂不可用" in tools._degraded_text("timeout")  # 保留旧措辞，兼容既有调用方
-    assert "未联网核实" in tools._degraded_text("timeout")
+    assert "暂不可用" in tools.degraded_text("timeout")  # 保留旧措辞，兼容既有调用方
+    assert "未联网核实" in tools.degraded_text("timeout")
 
 
 def test_search_tool_returns_degraded_text_on_failure(monkeypatch):
@@ -169,7 +169,7 @@ def test_tool_loop_marks_soft_failure_as_not_ok(monkeypatch):
     @lc_tool
     def search_web(query: str) -> str:
         """伪工具：恒定返回降级文本。"""
-        return tools._degraded_text("timeout")
+        return tools.degraded_text("timeout")
 
     class _FakeModel:
         def __init__(self) -> None:
@@ -207,22 +207,32 @@ def test_fetch_time_can_be_disabled(monkeypatch):
 
 
 def test_document_time_prefers_meta_then_file_mtime(tmp_path):
-    """文档时间：先取入库元信息，再按来源文件 mtime 推断，都没有就「未知」。"""
+    """文档时间提取：先取入库元信息，再按来源文件 mtime 推断，都没有就「未知」。
+
+    注意契约分层：`_document_time_value` 只负责**取到原始时间**，
+    `_document_time` 在它之上加「距今天数 / 是否可能过期」的标注
+    （标注的测试在 tests/test_freshness.py）。
+    """
     from_meta = SimpleNamespace(source="(不存在).md", meta={"updated_at": "2025-01-02 10:30:00"})
-    assert tools._document_time(from_meta) == "2025-01-02 10:30"
+    assert tools._document_time_value(from_meta) == "2025-01-02 10:30"
 
     doc = tmp_path / "kb.md"
     doc.write_text("内容", encoding="utf-8")
-    by_mtime = tools._document_time(SimpleNamespace(source=str(doc), meta={}))
+    by_mtime = tools._document_time_value(SimpleNamespace(source=str(doc), meta={}))
     assert by_mtime[:4] == str(datetime.now().year)
 
-    assert tools._document_time(SimpleNamespace(source="缺失.md", meta={})) == "未知"
+    assert tools._document_time_value(SimpleNamespace(source="缺失.md", meta={})) == "未知"
+
+    # 标注层：过期资料必须被写成「可能已过期」，而不是原样输出一个日期
+    assert "可能已过期" in tools._document_time(from_meta)
 
 
 def test_knowledge_tool_marks_document_time(monkeypatch):
     """知识库片段必须带文档时间；查不到来源时也要显式写「未知」，不许留空。"""
     chunk = SimpleNamespace(source="文档A.md", page=3, text="片段内容", meta={})
-    monkeypatch.setattr(tools, "_run_with_timeout", lambda fn, timeout, default, what: [chunk])
+    # 知识库工具与联网检索共用同一套「超时 + 分级」实现（_run_with_status），
+    # 因此这里打桩的是它，而不是更底层的 _run_with_timeout。
+    monkeypatch.setattr(tools, "_run_with_status", lambda fn, timeout, what: (True, [chunk], ""))
 
     class _Pipeline:
         def retrieve(self, query, cfg=None):

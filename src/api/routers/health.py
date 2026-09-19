@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ... import config, metrics
+from ... import config, faults, metrics, tasks
 from ...embeddings import check_embedding_health
 from ...graph.checkpoint import backend_name
 from ...llm import check_llm_health
@@ -33,6 +33,12 @@ async def health():
             "session_resume": config.ENABLE_SESSION_RESUME,
             "slot_memory": config.ENABLE_SLOT_MEMORY,
             "tool_calling": config.ENABLE_TOOL_CALLING,
+            # 故障注入状态也要可见：否则「这次为什么全在失败」会变成没人说得清的悬案
+            "fault_injection": faults.describe(),
+            # 在途任务（排队 / 执行中）：背压与取消都必须能被看见，
+            # 否则「为什么一直转圈」「点了停止到底停没停」只能靠猜。
+            "tasks": tasks.snapshot(),
+            "api_max_queue": config.API_MAX_QUEUE,
         },
         metrics=metrics.snapshot(),
     )

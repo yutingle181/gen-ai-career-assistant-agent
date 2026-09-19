@@ -252,6 +252,17 @@ def render_trajectory(stats: dict[str, Any] | TrajectoryStats, index: int = 4) -
         else "- **Failure Onset**：本批样本没有工具失败步。"
     )
 
+    # 对照路径的降级必须单列：它是最常跑的生产路径，检索挂掉时
+    # 只看实验组会得出「一切正常」的假结论（故障注入实验已撞到过这一点）。
+    explicit = data.get("explicit_degradation") or {}
+    if explicit.get("samples"):
+        onset_ex = explicit.get("avg_failure_onset")
+        tail = f"，Failure Onset 均值 {onset_ex}" if onset_ex is not None else "，无失败步"
+        lines.append(
+            f"- 对照组（显式检索，{explicit['samples']} 条）：工具失败率 "
+            f"{float(explicit.get('tool_failure_rate') or 0) * 100:.1f}%{tail}"
+        )
+
     reasons = data.get("failed_reasons") or {}
     if reasons:
         lines += ["", "失败原因分布：", ""]

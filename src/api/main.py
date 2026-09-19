@@ -112,6 +112,7 @@ def create_app() -> FastAPI:
             "endpoints": [
                 "POST /chat",
                 "POST /chat/stream (SSE)",
+                "POST /chat/cancel",
                 "POST /chat/finish",
                 "GET  /knowledge",
                 "POST /knowledge/{kb}/ingest",

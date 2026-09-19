@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -46,6 +46,9 @@ class RetrievedChunk(BaseModel):
     vector_rank: int | None = None
     bm25_rank: int | None = None
     rerank_score: float | None = None
+    # 片段元信息（入库时间等）必须带出检索层：否则「资料是什么时候的」在工具层
+    # 只能靠源文件路径反推——文件被移走 / 清理后就永久是「未知」。
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class Citation(BaseModel):

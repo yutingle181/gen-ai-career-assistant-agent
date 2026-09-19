@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from langchain_core.messages import BaseMessage, SystemMessage
 
@@ -44,6 +44,10 @@ class BaseAgent:
         self.citations: list[str] = []
         # 工具调用过程回调（由 SessionManager 注入，用于把过程透出到 SSE / 界面）
         self.tool_event_listener = None
+        # 协作式取消信号（由 API 网关按需注入：用户点停止 / 客户端断开）。
+        # 与 tool_event_listener 一样属于「按请求注入、用完恢复」的临时钩子，
+        # 因此放在实例上而不是构造参数里——避免让所有调用方都多传一个参数。
+        self.should_stop: Callable[[], bool] | None = None
 
     # ---------------------------------------------------------- 工具调用路径
     @property
@@ -104,6 +108,7 @@ class BaseAgent:
                 max_tokens=max_tokens,
                 on_event=self.tool_event_listener,
                 thread_id=thread_id,
+                should_stop=self.should_stop,
             )
         return llm_invoke(self.build_messages(history), model=model, max_tokens=max_tokens)
 
@@ -120,6 +125,7 @@ class BaseAgent:
                 max_tokens=max_tokens,
                 on_event=self.tool_event_listener,
                 thread_id=thread_id,
+                should_stop=self.should_stop,
             )
         from ..llm import llm_stream
 

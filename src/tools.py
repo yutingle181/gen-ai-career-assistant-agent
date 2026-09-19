@@ -27,10 +27,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Any, TypeVar
 
-from . import config, metrics
+from . import config, faults, freshness, metrics
 from .logging_setup import get_logger, summarize
 
 logger = get_logger(__name__)
@@ -53,6 +52,11 @@ ERROR_LABELS: dict[str, str] = {
 
 #: 参与熔断统计的工具名（与 bind_tools 暴露的名字一致，便于对照事件流）。
 _SEARCH_TOOL_NAME = "search_web"
+
+#: 知识库检索链路的名字：工具调用与显式预检索**共用**这一个名字。
+#: 共用是刻意的 —— 它们走同一份实现（`retrieve_with_grade`），
+#: 因此熔断计数、指标与故障注入目标也应当是同一份。
+_KB_TOOL_NAME = "knowledge_search"
 
 #: 值得重试的分类：都是**瞬态**故障。
 #: 刻意排除 http_4xx（参数/权限问题，重试只会浪费一次超时）与 disabled。
@@ -114,19 +118,27 @@ def degraded_kind(text: str) -> str:
     return match.group(1) if match else ""
 
 
-def _degraded_text(error_kind: str) -> str:
+def degraded_text(error_kind: str, *, channel: str = "web") -> str:
     """把失败分类翻译成一句「事实说明」回灌给模型。
 
-    措辞要点：说明**没拿到外部资料**、要求**明说未联网核实**，并保留旧文案里的
-    「暂不可用」表述（既有调用方与用例依赖这一措辞，且它足够准确）。
+    措辞要点：说明**没拿到资料**、要求**明说未核实**，并保留旧文案里的「暂不可用」表述
+    （既有调用方与用例依赖这一措辞，且它足够准确）。
+
+    `channel` 决定主语与免责要求：`web`=联网检索（拿不到外部资料 → 说明未联网核实）、
+    `kb`=知识库检索（拿不到你的资料 → 说明未取得资料依据）。两者必须区分——
+    要是知识库检索失败却说成「没联网」，模型会给出错误的免责声明，用户也无从排查。
     """
     label = ERROR_LABELS.get(error_kind, ERROR_LABELS["unknown"])
+    if channel == "kb":
+        subject, demand = "知识库检索", "未取得资料依据"
+    else:
+        subject, demand = "联网检索", "未联网核实"
     if error_kind == "empty":
-        sentence = "联网检索没有返回公开结果，请基于已有信息作答，并说明未检索到外部资料。"
+        sentence = f"{subject}没有返回结果，请基于已有信息作答，并说明{demand}。"
     else:
         sentence = (
-            f"联网检索暂不可用（{label}），本轮没有获得任何外部资料，"
-            "请基于已有信息作答，并在回答中明确说明未联网核实。"
+            f"{subject}暂不可用（{label}），本轮没有取得任何资料，"
+            f"请基于已有信息作答，并在回答中明确说明{demand}。"
         )
     return f"{DEGRADED_MARK}:{error_kind}】{sentence}"
 
@@ -274,6 +286,21 @@ def _search_once(backend: str, query: str, max_results: int) -> str:
     return tool.run(query) or ""
 
 
+def _search_once_chaos(backend: str, query: str, max_results: int) -> str:
+    """单次检索 + 故障注入口（注入关闭时是纯透传，零行为变化）。
+
+    注入点刻意放在这里而不是调用方特判：模拟故障会走与真实故障**完全同一条**处理链
+    （守护线程 → 错误分级 → 重试/换源 → 降级标记 → 熔断计数），
+    特判出来的「演示」证明不了任何东西。
+    """
+    injected = faults.maybe_fail(_SEARCH_TOOL_NAME)
+    if injected is not None:
+        raise injected
+    if faults.maybe_empty(_SEARCH_TOOL_NAME):
+        return ""
+    return _search_once(backend, query, max_results)
+
+
 def _search_plan(query: str) -> list[tuple[str, str]]:
     """构造检索计划：原式 → 简化式 → 备选通道。
 
@@ -333,7 +360,7 @@ def web_search_detailed(
             # 默认参数绑定当前这一轮的通道与检索式：lambda 在守护线程里执行，
             # 直接引用循环变量会读到「之后的值」（B023），变成用错参数发请求。
             ok, text, kind = _run_with_status(
-                lambda b=backend, q=plan_query: _search_once(b, q, max_results),
+                lambda b=backend, q=plan_query: _search_once_chaos(b, q, max_results),
                 timeout,
                 "联网检索",
             )
@@ -366,26 +393,83 @@ def web_search(query: str, max_results: int = 5, timeout: int | None = None) -> 
     return web_search_detailed(query, max_results=max_results, timeout=timeout).text
 
 
-def _document_time(chunk: Any) -> str:
-    """推断知识库片段的文档时间（没有则明说「未知」）。
+def _document_time_value(chunk: Any) -> str:
+    """取片段的原始文档时间（实现与数据侧统计共用 `freshness.chunk_time`）。
 
-    优先用入库时记录的元信息；缺失时按来源路径的文件修改时间推断 ——
+    取法优先级：入库元信息 → 来源文件 mtime → 「未知」——
     宁可标注「未知」，也不要让模型把过时资料当最新事实。
     """
-    meta = getattr(chunk, "meta", None) or {}
-    for key in ("updated_at", "mtime", "modified", "indexed_at"):
-        value = meta.get(key)
-        if value:
-            return str(value)[:16]
-    source = str(getattr(chunk, "source", "") or "")
-    if source:
-        for candidate in (Path(source), config.KNOWLEDGE_DIR / source, config.SAMPLES_DIR / source):
-            try:
-                if candidate.is_file():
-                    return datetime.fromtimestamp(candidate.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            except OSError:
-                continue
-    return "未知"
+    return freshness.chunk_time(chunk)
+
+
+def _document_time(chunk: Any) -> str:
+    """文档时间的**标注版**：距今天数 + 是否可能过期（工具算好再交给模型）。
+
+    只印一个日期是不够的：模型既没有时钟、也不会做日期减法，
+    「距今 1236 天，可能已过期」这种结论式标注才拦得住「把三年前的数据当现状」。
+    """
+    label, suspect = freshness.annotate(_document_time_value(chunk))
+    if suspect:
+        metrics.incr("tool.result.stale")
+        logger.info("命中时效可疑资料 | %s | %s", getattr(chunk, "source", "?"), label)
+    return label
+
+
+def retrieve_with_grade(
+    pipeline, query: str, retrieval_cfg=None, *, use_cache: bool | None = None
+) -> tuple[bool, list, str]:
+    """知识库检索的统一契约：超时 + 错误分级 + 瞬态重试 + 熔断 + 可注入故障。
+
+    返回 `(ok, chunks, error_kind)`。为什么必须收成一个函数：
+
+    检索失败的处理此前散落在各调用点，且结局只有两种 —— 崩掉，或静默变成「没有结果」。
+    后者更危险：模型会把「这次没查成」当成「知识库里没有」，然后理直气壮地凭记忆作答。
+    把「检索 + 分级 + 如实降级」收成一处，调用方就**绕不开**它：
+    —— 工具路径（`knowledge_search`）与显式检索路径（评测对照组 / 预检索）共用同一实现，
+    也共用同一套失败语义与同一份指标，不再出现「一条路径会降级、另一条直接 500」。
+
+    `use_cache` 默认 `None`＝不传该参数，保持与既有调用完全一致的缓存语义；
+    只有评测需要「冷启动」延迟时才显式传 `False`。
+    """
+    metrics.incr("tool.call.total")
+
+    breaker = get_breaker()
+    if breaker.is_open(_KB_TOOL_NAME):
+        metrics.incr("tool.call.blocked")
+        logger.warning("知识库检索处于熔断冷却期，直接短路 | %s", summarize(query))
+        return False, [], "circuit_open"
+
+    def _retrieve():
+        # 注入口放在真正的调用内部：模拟故障与真实故障走同一条处理链
+        injected = faults.maybe_fail(_KB_TOOL_NAME)
+        if injected is not None:
+            raise injected
+        if use_cache is None:
+            return pipeline.retrieve(query, retrieval_cfg)
+        return pipeline.retrieve(query, retrieval_cfg, use_cache=use_cache)
+
+    per_attempt = max(1, config.WEB_SEARCH_RETRY_ATTEMPTS)
+    backoff = max(0.0, config.WEB_SEARCH_RETRY_BACKOFF)
+    last_kind = ""
+    attempt = 0
+    for attempt in range(1, per_attempt + 1):
+        # 与联网检索同等待遇：向量化 + 检索同样可能因网络挂起，超时即降级
+        ok, chunks, kind = _run_with_status(_retrieve, config.WEB_SEARCH_TIMEOUT, "知识库检索")
+        if ok:
+            breaker.record(_KB_TOOL_NAME, True)
+            metrics.incr("tool.call.ok")
+            return True, list(chunks or []), ""
+        last_kind = kind or "unknown"
+        if last_kind not in RETRYABLE_ERRORS:
+            break  # 参数 / 权限类错误重试无意义
+        if attempt < per_attempt and backoff:
+            time.sleep(backoff)
+
+    logger.warning("知识库检索最终降级 | 分类=%s | 尝试=%d", last_kind, attempt)
+    breaker.record(_KB_TOOL_NAME, False)
+    metrics.incr("tool.call.fail")
+    metrics.incr(f"tool.fail.{last_kind or 'unknown'}")
+    return False, [], last_kind or "unknown"
 
 
 def _knowledge_search_tool(kb_name: str, retrieval_cfg=None):
@@ -393,6 +477,10 @@ def _knowledge_search_tool(kb_name: str, retrieval_cfg=None):
 
     `retrieval_cfg` 可显式指定检索配置；不传则用流水线默认值。
     评测场景会传入与显式路径**完全相同**的配置，保证 A/B 对比的是「链路」而非「检索参数」。
+
+    失败语义与联网检索**共用同一套契约**（见 `retrieve_with_grade`）：
+    此前这里一旦失败只回一句「未检索到相关内容。」—— 那句话会让模型以为
+    「知识库里没有」，而真相是「这次没查成」，两者的可信度含义正好相反。
     """
     from langchain_core.tools import tool as lc_tool
 
@@ -404,19 +492,20 @@ def _knowledge_search_tool(kb_name: str, retrieval_cfg=None):
         pipeline = get_registry().get(kb_name)
         if pipeline is None:
             return f"知识库 {kb_name} 不存在或尚未建库。"
-        # 与联网检索同等待遇：向量化 + 检索同样可能因网络挂起，超时即降级
-        chunks = _run_with_timeout(
-            lambda: pipeline.retrieve(query, retrieval_cfg),
-            config.WEB_SEARCH_TIMEOUT,
-            None,
-            "知识库检索",
-        )
-        if not chunks:
+
+        ok, chunks, kind = retrieve_with_grade(pipeline, query, retrieval_cfg)
+        if not ok:
+            return degraded_text(kind, channel="kb")
+        if faults.maybe_empty(_KB_TOOL_NAME) or not chunks:
+            # 「查了但没有」与「没查成」必须区分：这里说的是前者，可以放心作答
             return "未检索到相关内容。"
-        return "\n\n".join(
+        body = "\n\n".join(
             f"[{i + 1}] 来源：{c.source} 第{c.page or '-'}页（文档时间：{_document_time(c)}）\n{c.text}"
             for i, c in enumerate(chunks)
         )
+        # 多版本不做语义合并（那是模型与人该做的），但必须把「时间跨度大」这个事实摆出来
+        note = freshness.span_note([_document_time_value(c) for c in chunks])
+        return f"{body}\n\n{note}" if note else body
 
     return knowledge_search
 
@@ -436,7 +525,7 @@ def _safe_web_search_tool():
         outcome = web_search_detailed(query)
         if outcome.ok:
             return outcome.text
-        return _degraded_text(outcome.error_kind or "unknown")
+        return degraded_text(outcome.error_kind or "unknown")
 
     return search_web
 

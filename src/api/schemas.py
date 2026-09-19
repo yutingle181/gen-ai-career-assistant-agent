@@ -54,6 +54,12 @@ class KnowledgeInfo(BaseModel):
     has_bm25: bool = False
 
 
+class CancelRequest(BaseModel):
+    """取消一轮在途对话。"""
+
+    session_id: str = Field(description="要取消的会话 ID")
+
+
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
