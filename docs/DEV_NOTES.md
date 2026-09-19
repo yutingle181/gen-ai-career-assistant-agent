@@ -76,3 +76,11 @@
 - 解决：兼容性判据用真实构造 / 真实调用并断言关键属性，签名只作线索；符号是否存在用 hasattr、参数是否可用用调用、行为是否等价用跑测试；对 pydantic 系库尤其如此
 - 标签：python,pydantic,依赖升级,验证方法
 
+### 3. 跨环境验证踩的两个坑：PowerShell 管道带 BOM / 脚本的 sys.path
+
+- 日期：2026-09-20
+- 现象：① 用 here-string 管道把代码传给 python（python -）报 SyntaxError: invalid non-printable character U+FEFF；② 用绝对路径运行临时脚本（cwd 已是项目根）报 ModuleNotFoundError: No module named src
+- 原因：① PowerShell 5.1 的管道/输出编码会给内容加 UTF-8 BOM，Python 把 BOM 当成源码首字符；② 脚本模式下 sys.path 第一项是脚本所在目录而非当前工作目录，所以 cwd 在项目根也 import 不到包
+- 解决：① 代码写进临时文件（[IO.File]::WriteAllText + UTF8 无 BOM）再按文件路径执行；② 设 env:PYTHONPATH 指向项目根，或把临时脚本放进项目内执行后删除
+- 标签：powershell,python,编码,跨环境验证
+
