@@ -11,6 +11,7 @@ from ..models import MetricResult
 from ..rag.pipeline import RAGPipeline
 from ..storage import save_file
 from .tool_eval import ToolComparison
+from .trajectory import render_trajectory
 
 logger = get_logger(__name__)
 
@@ -25,8 +26,15 @@ def render_report(
     k: int = 5,
     sample_count: int = 0,
     tool_comparison: ToolComparison | None = None,
+    trajectory: dict | None = None,
 ) -> str:
-    """渲染 Markdown 评测报告；传入 `tool_comparison` 时追加工具调用 A/B 章节。"""
+    """渲染 Markdown 评测报告；传入 `tool_comparison` 时追加工具调用 A/B 章节。
+
+    `trajectory` 缺省时自动取 A/B 结果里的轨迹指标（工具调用路径算出来的那份），
+    因此现有调用方不改一行也能在报告里看到 TaskSuccessRate / Failure Onset。
+    """
+    if trajectory is None and tool_comparison is not None:
+        trajectory = tool_comparison.trajectory
     stats = pipeline.stats() if pipeline else {}
     lines: list[str] = [
         "# RAG 效果评测报告",
@@ -68,6 +76,11 @@ def render_report(
     if tool_comparison is not None:
         lines += render_tool_comparison(tool_comparison)
         next_index = 4
+    # 轨迹级指标紧跟工具 A/B：两者回答的是同一问题的两面——
+    # 「这条链路贵不贵」与「这条链路稳不稳、错了最先错在第几步」。
+    if trajectory:
+        lines += render_trajectory(trajectory, next_index)
+        next_index += 1
 
     lines += ["", f"## {next_index}. 结论与优化建议", ""]
     lines.extend(_conclusions(results))
@@ -86,6 +99,8 @@ def render_report(
             "explicit": tool_comparison.explicit.model_dump(),
             "tool_calling": tool_comparison.tool_calling.model_dump(),
         }
+    if trajectory:
+        snapshot["trajectory"] = trajectory
     lines.append(json.dumps(snapshot, ensure_ascii=False, indent=2))
     lines += ["```", ""]
     return "\n".join(lines)
@@ -211,9 +226,12 @@ def save_report(
     pipeline: RAGPipeline | None = None,
     k: int = 5,
     tool_comparison: ToolComparison | None = None,
+    trajectory: dict | None = None,
 ) -> str:
     """渲染并保存报告，返回路径。"""
-    content = render_report(results, pipeline, k=k, tool_comparison=tool_comparison)
+    content = render_report(
+        results, pipeline, k=k, tool_comparison=tool_comparison, trajectory=trajectory
+    )
     path = save_file(content, "Eval_Report")
     logger.info("评测报告已生成 | %s", path)
     return path

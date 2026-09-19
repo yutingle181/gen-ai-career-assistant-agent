@@ -67,10 +67,12 @@ class InterviewReviewAgent(BaseAgent):
         self.result: InterviewReview | None = None
 
     def respond(self, history: Sequence[BaseMessage], model: str | None = None,
-                max_tokens: int | None = None) -> str:
+                max_tokens: int | None = None, thread_id: str | None = None) -> str:
         """产出结构化复盘；结构化输出不可用时回退为纯文本点评。"""
         if self.use_tool_calling:
-            return super().respond(history, model=model, max_tokens=max_tokens)
+            return super().respond(
+                history, model=model, max_tokens=max_tokens, thread_id=thread_id
+            )
 
         messages = self.build_messages(history)
         try:
@@ -91,9 +93,9 @@ class InterviewReviewAgent(BaseAgent):
         return f"{MISSING_CONTEXT_TIP}\n\n{text}"
 
     def respond_stream(self, history: Sequence[BaseMessage], model: str | None = None,
-                       max_tokens: int | None = None):
+                       max_tokens: int | None = None, thread_id: str | None = None):
         """一次产出后分段推送。"""
-        text = self.respond(history, model=model, max_tokens=max_tokens)
+        text = self.respond(history, model=model, max_tokens=max_tokens, thread_id=thread_id)
         step = 40
         for i in range(0, len(text), step):
             yield text[i : i + step]

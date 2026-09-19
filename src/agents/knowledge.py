@@ -53,11 +53,13 @@ class KnowledgeAgent(BaseAgent):
         return ""
 
     def respond(self, history: Sequence[BaseMessage], model: str | None = None,
-                max_tokens: int | None = None) -> str:
+                max_tokens: int | None = None, thread_id: str | None = None) -> str:
         """优先走 RAG；知识库不可用时回退为普通问答。"""
         if self.use_tool_calling:
             # 工具调用路径：由模型自主决定何时检索知识库，检索结果自带来源标注
-            return super().respond(history, model=model, max_tokens=max_tokens)
+            return super().respond(
+                history, model=model, max_tokens=max_tokens, thread_id=thread_id
+            )
 
         query = self._last_user_text(history)
         pipe = self.pipeline
@@ -92,9 +94,9 @@ class KnowledgeAgent(BaseAgent):
         return result.answer + citations_text
 
     def respond_stream(self, history: Sequence[BaseMessage], model: str | None = None,
-                       max_tokens: int | None = None):
+                       max_tokens: int | None = None, thread_id: str | None = None):
         """知识库问答为一次性生成，流式退化为分段推送。"""
-        text = self.respond(history, model=model, max_tokens=max_tokens)
+        text = self.respond(history, model=model, max_tokens=max_tokens, thread_id=thread_id)
         step = 40
         for i in range(0, len(text), step):
             yield text[i : i + step]

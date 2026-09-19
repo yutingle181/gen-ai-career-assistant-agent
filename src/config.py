@@ -148,7 +148,40 @@ RETRIEVAL_CACHE_TTL: int = _int("RETRIEVAL_CACHE_TTL", 3600)
 MAX_HISTORY: int = _int("MAX_HISTORY", 10)
 ENABLE_WEB_SEARCH: bool = _bool("ENABLE_WEB_SEARCH", True)
 WEB_SEARCH_TIMEOUT: int = _int("WEB_SEARCH_TIMEOUT", 10)
+# 联网检索失败分级（P0-2）：同通道重试次数 / 退避秒数 / 备选通道 / 检索式简化长度。
+# 默认值的权衡：2 次重试（合计最多 3 次尝试）× 0.5s 退避，最坏多花约 1s；
+# 相对「联网不可用时整轮拿不出东西」，这个代价是值得的。
+WEB_SEARCH_RETRY_ATTEMPTS: int = _int("WEB_SEARCH_RETRY_ATTEMPTS", 2)
+WEB_SEARCH_RETRY_BACKOFF: float = _float("WEB_SEARCH_RETRY_BACKOFF", 0.5)
+# 备选通道：DuckDuckGo 的 backend 维度（auto / text / news）。换通道即换上游接口，
+# 因此「同参数重试仍失败」后值得一试；留空或 auto 表示不做换通道这一步。
+WEB_SEARCH_ALT_BACKEND: str = os.getenv("WEB_SEARCH_ALT_BACKEND", "text").strip()
+# 「换参数」时把检索式截断到多少字符（检索式过长 / 引号过多是空结果的常见原因）
+WEB_SEARCH_SIMPLIFY_CHARS: int = _int("WEB_SEARCH_SIMPLIFY_CHARS", 60)
+# 数据时效（P0-3）：给工具结果注入抓取时间，供 Prompt 判断资料新鲜度
+ENABLE_FETCH_TIME: bool = _bool("ENABLE_FETCH_TIME", True)
+# 工具熔断（P2-7）：重试解决「单次抖动」，不解决「上游整体挂了」。
+# 连续失败到阈值后，冷却期内直接短路（不再打上游），把成倍的等待时间换成立刻如实告知。
+ENABLE_TOOL_CIRCUIT_BREAKER: bool = _bool("ENABLE_TOOL_CIRCUIT_BREAKER", True)
+TOOL_BREAKER_THRESHOLD: int = _int("TOOL_BREAKER_THRESHOLD", 3)
+TOOL_BREAKER_COOLDOWN: int = _int("TOOL_BREAKER_COOLDOWN", 60)
 ENABLE_CACHE: bool = _bool("ENABLE_CACHE", True)
+
+# ---------------------------------------------------------------- 可恢复性（P1-4）
+# 进程挂掉后，同一个 session_id 必须能接着聊：会话级状态（历史 / 转写 / 模式 / 产物）
+# 从 SQLite 重建；单轮工具闭环另外挂图级 checkpoint，使「同一轮重试」不重复执行工具。
+ENABLE_SESSION_RESUME: bool = _bool("ENABLE_SESSION_RESUME", True)
+# 槽位记忆（P2-6）：把「目标城市 / 岗位方向 / 时间范围 / 学历」这类硬约束单独记下来，
+# 每轮裁剪后重新注入，避免被 trim_messages 裁掉后模型就"忘了"。
+# **默认关闭**：它改变了提示词组装，属于有回归风险的能力——
+# 先关着，用 A/B 证明它确实提升约束遵循率再打开（沿用工具调用开关的同一套态度）。
+ENABLE_SLOT_MEMORY: bool = _bool("ENABLE_SLOT_MEMORY", False)
+# 图级 checkpoint 后端按「sqlite → memory → 不启用」自动降级（见 src/graph/checkpoint.py）：
+# 装了 langgraph-checkpoint-sqlite 才是跨进程的；只装 langgraph-checkpoint 则为进程内。
+ENABLE_CHECKPOINT: bool = _bool("ENABLE_CHECKPOINT", True)
+CHECKPOINT_DB_PATH: str = os.getenv(
+    "CHECKPOINT_DB_PATH", str(DATA_DIR / "checkpoints.sqlite")
+).strip()
 
 # ---------------------------------------------------------------- Function Calling 自主工具调用
 # 关闭（默认）时完全走原有「显式检索」路径，行为与改造前逐字节一致，基线用例零改动；
@@ -157,6 +190,12 @@ ENABLE_CACHE: bool = _bool("ENABLE_CACHE", True)
 ENABLE_TOOL_CALLING: bool = _bool("ENABLE_TOOL_CALLING", False)
 # 工具调用轮次硬上限：达到上限强制收束为自然语言作答，避免不可控的模型往返膨胀。
 TOOL_CALLING_MAX_STEPS: int = _int("TOOL_CALLING_MAX_STEPS", 3)
+# 图级递归上限（LangGraph recursion_limit，默认 25）。与上面的「单轮轮次上限」是两层：
+# 轮次上限管 ReAct 调了几轮工具，这里管整个图被执行了多少个超步。
+# 显式配置的意义是：即使条件边判断失效（例如模型持续产出 tool_calls 而收束节点未被走到），
+# 图执行也会被硬性终止，并且我们捕获 GraphRecursionError 后强制收束为阶段性结论，
+# 而不是把栈抛给用户。
+TOOL_RECURSION_LIMIT: int = _int("TOOL_RECURSION_LIMIT", 25)
 # ---------------------------------------------------------------- 会话/Prompt 缓存（DashScope 上下文缓存）
 # 仅对支持显式缓存的模型（qwen 系列）生效；开启后 user_context 长前缀标记 cache_control，
 # 跳过重复 prefill。不支持的模型 / 开关关闭时自动退化为普通消息，行为不回归。
@@ -210,7 +249,10 @@ def describe() -> dict:
         "检索": f"BM25={USE_BM25} 向量={USE_VECTOR} 融合={FUSION} top_k={TOP_K}",
         "切分": f"size={CHUNK_SIZE} overlap={CHUNK_OVERLAP}",
         "联网搜索": ENABLE_WEB_SEARCH,
+        "检索重试": f"{WEB_SEARCH_RETRY_ATTEMPTS}次/退避{WEB_SEARCH_RETRY_BACKOFF}s",
+        "抓取时间": ENABLE_FETCH_TIME,
         "工具调用": ENABLE_TOOL_CALLING,
+        "图级递归上限": TOOL_RECURSION_LIMIT,
         "缓存": ENABLE_CACHE,
         "召回缓存": ENABLE_RETRIEVAL_CACHE,
         "Prompt缓存": ENABLE_PROMPT_CACHE,

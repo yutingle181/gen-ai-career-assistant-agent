@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from ... import config
+from ... import config, metrics
 from ...embeddings import check_embedding_health
+from ...graph.checkpoint import backend_name
 from ...llm import check_llm_health
 from ...rag.registry import get_registry
+from ...tools import get_breaker
 from ..schemas import HealthResponse
 
 router = APIRouter(tags=["health"])
@@ -25,6 +27,14 @@ async def health():
         embedding_detail=emb_detail,
         knowledge_bases=get_registry().names(),
         config=config.describe(),
+        runtime={
+            "checkpoint": backend_name(),
+            "tool_circuit": get_breaker().snapshot(),
+            "session_resume": config.ENABLE_SESSION_RESUME,
+            "slot_memory": config.ENABLE_SLOT_MEMORY,
+            "tool_calling": config.ENABLE_TOOL_CALLING,
+        },
+        metrics=metrics.snapshot(),
     )
 
 

@@ -9,9 +9,13 @@ import uuid
 from fastapi import Header, HTTPException
 
 from .. import config
+from ..logging_setup import get_logger
 from ..rag.pipeline import RetrievalConfig
 from ..rag.registry import get_registry
 from ..session import SessionManager
+from . import db
+
+logger = get_logger(__name__)
 
 # 进程内会话表（SessionManager 持有 LangChain 消息对象，不入库）
 _SESSIONS: dict[str, SessionManager] = {}
@@ -44,6 +48,43 @@ def drop_session(session_id: str) -> None:
 def session_count() -> int:
     with _LOCK:
         return len(_SESSIONS)
+
+
+def restore_session(session_id: str) -> SessionManager | None:
+    """从 SQLite 重建会话（进程重启后的恢复路径，P1-4）。
+
+    恢复的是**会话级**状态：模式 / 知识库 / 历史消息 / 转写记录 / 完成标记与产物路径。
+    刻意不恢复「执行中那一轮」的图状态——那由 checkpoint 负责（`graph/checkpoint.py`），
+    两者职责不重叠，恢复逻辑也就不会互相猜测对方的状态格式。
+
+    返回 None 表示「无法恢复」（开关关闭 / 库里没有该会话 / 读库异常），
+    上层按新建会话处理——恢复能力失效不该让请求直接失败。
+    """
+    if not config.ENABLE_SESSION_RESUME:
+        return None
+    try:
+        row = db.get_session(session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取会话失败，按新会话处理 | id=%s | %s", session_id, exc)
+        return None
+    if row is None:
+        return None
+
+    rows = db.list_messages(session_id)
+    manager = SessionManager(row.mode, kb_name=row.kb_name or None)
+    manager.session_id = session_id
+    manager.restore([(r.role, r.content or "") for r in rows])
+    manager.finished = bool(row.finished)
+    manager.artifact_path = row.artifact or None
+    put_session(session_id, manager)
+    logger.info(
+        "会话已从持久化恢复 | id=%s | mode=%s | 历史=%d 条 | 已导出=%s",
+        session_id,
+        row.mode,
+        len(rows),
+        manager.finished,
+    )
+    return manager
 
 
 def get_semaphore() -> asyncio.Semaphore:

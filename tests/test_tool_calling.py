@@ -268,3 +268,40 @@ def test_jobsearch_keeps_prefetch_when_tool_calling_off(monkeypatch):
 
     ctx = JobSearchAgent().prepare("长沙 AI 岗位")
     assert "联网检索结果" in ctx
+
+
+# ------------------------------------------------------------------ 图级递归上限（第二层终止条件）
+def test_graph_recursion_limit_degrades_gracefully(monkeypatch):
+    """图级递归上限触发时，必须返回可读结论，而不是把 GraphRecursionError 抛给用户。
+
+    这里刻意把图级上限压到 2、轮次上限放宽到 10：模型持续要求调工具，
+    「轮次上限」这条路径走不到，只能由 LangGraph 的递归上限硬停，
+    再由 `_forced_finalize` 兜出文案。
+    """
+    _patch_model(monkeypatch, [_tool_call("search_web", {"query": "一直调"})])
+    monkeypatch.setattr(config, "TOOL_RECURSION_LIMIT", 2)
+
+    out = tool_loop.run_with_tools(
+        [HumanMessage(content="查")], tools=[search_web], max_steps=10
+    )
+    assert out == tool_loop.RECURSION_FALLBACK_TEXT
+
+
+def test_route_only_passes_recursion_limit(monkeypatch):
+    """路由图也必须显式带上图级上限，避免后续扩图时退化到 LangGraph 默认值。"""
+    from src.graph import workflow
+
+    captured: dict = {}
+
+    class _FakeApp:
+        def invoke(self, payload, config=None):
+            captured["payload"] = payload
+            captured["config"] = config
+            return {"mode": "qa", "message": "ok", "category": "learning"}
+
+    monkeypatch.setattr(workflow, "get_app", lambda: _FakeApp())
+    monkeypatch.setattr(config, "TOOL_RECURSION_LIMIT", 7)
+
+    workflow.route_only("你好")
+    assert captured["payload"] == {"query": "你好"}
+    assert captured["config"] == {"recursion_limit": 7}

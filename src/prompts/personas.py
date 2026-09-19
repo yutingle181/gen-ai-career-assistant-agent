@@ -20,6 +20,16 @@ from ..state import (
 
 LANG_RULE = "请使用简体中文回复，除非用户明确使用了其他语言。"
 
+# 数据时效规则（P0-3）：工具结果自带抓取时间 / 文档时间，但模型本身没有时钟——
+# 只有把「必须据实声明时效」写成硬约束，它才不会把一段三年前的资料当成最新信息用。
+FRESHNESS_RULE = """
+资料时效规则（必须遵守）：
+1. 引用【联网检索结果】或知识库片段时，一并说明资料时间（工具会给出抓取时间 / 文档时间）；
+2. 资料时间未知、或明显早于当前时间时，必须声明"该信息可能已过时"，不得默认它是最新的；
+3. 若资料带着【工具降级】标记（例如联网检索暂不可用），必须说明"本轮未获得外部资料，
+   结论仅基于已有知识"，不要编造来源、链接或"我查到的"这类说辞。
+"""
+
 # 新增：按 JD 改写简历时使用
 RESUME_JD_SUFFIX = """
 当用户提供了岗位描述（JD）时，请按以下步骤工作：
@@ -111,6 +121,6 @@ When structured output is unavailable, reply in exactly this Markdown shape so t
 
 
 def get_persona(mode: str) -> str:
-    """获取场景人设（已追加语言规则）。"""
+    """获取场景人设（已追加语言规则与资料时效规则）。"""
     base = PERSONAS.get(mode, PERSONAS[MODE_QA])
-    return f"{base}\n\n{LANG_RULE}"
+    return f"{base}\n\n{LANG_RULE}\n{FRESHNESS_RULE}"

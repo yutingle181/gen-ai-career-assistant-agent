@@ -28,6 +28,7 @@ from ..cache import count_tokens
 from ..logging_setup import get_logger
 from ..state import MODE_QA
 from .runner import _map_concurrent, _resolve_workers
+from .trajectory import stats_from_outcomes
 
 logger = get_logger(__name__)
 
@@ -49,6 +50,10 @@ class PathOutcome:
     rounds: int = 1  # 模型往返轮次（显式路径固定 1 轮）
     tool_calls: int = 0  # 实际执行的工具调用次数
     citations: list[str] = field(default_factory=list)
+    # 轨迹级评测（P1-5）需要「最终文本 + 逐步事件」：只用轮次/耗时无法判断
+    # 成功是靠一次到位还是靠盲目重试撞出来的。
+    text: str = ""
+    events: list[dict] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -78,6 +83,8 @@ class ToolComparison(BaseModel):
     explicit: ToolPathMetric
     tool_calling: ToolPathMetric
     sample_count: int = 0
+    # 轨迹级指标（仅实验组：Agent 路径才谈得上轨迹），见 eval/trajectory.py
+    trajectory: dict | None = None
 
     def rows(self) -> list[tuple[str, ToolPathMetric]]:
         return [(PATH_EXPLICIT, self.explicit), (PATH_TOOL_CALLING, self.tool_calling)]
@@ -169,6 +176,11 @@ def compare_paths(
         explicit=summarize_path(PATH_EXPLICIT, explicit_outs, config_snapshot=explicit_config),
         tool_calling=summarize_path(PATH_TOOL_CALLING, tool_outs, config_snapshot=tool_config),
         sample_count=len(records),
+        # 轨迹级指标只统计实验组：显式路径没有「多轮 + 工具事件」可言，
+        # 把它并进同一张表会得到一个恒定的假轨迹（固定 1 轮、0 次工具）。
+        trajectory=stats_from_outcomes(
+            tool_outs, mode=MODE_QA, max_steps=config.TOOL_CALLING_MAX_STEPS
+        ).to_dict(),
     )
     logger.info(
         "双路径对比完成 | 样本=%d | 显式 %.0fms/%.0ftoken | 工具调用 %.0fms/%.0ftoken | 工具调用率 %.0f%%",
@@ -223,6 +235,7 @@ def make_explicit_runner(
             rounds=1,
             tool_calls=1,  # 显式路径的「一次检索」即其工具调用
             citations=[getattr(c, "chunk_id", "") for c in chunks],
+            text=answer or "",
         )
 
     return _run
@@ -269,6 +282,8 @@ def make_tool_runner(
             completion_tokens=count_tokens(answer or ""),
             rounds=1 + len(events),  # 首轮决策 + 每次工具回灌后各一轮
             tool_calls=len(events),
+            text=answer or "",
+            events=events,
         )
 
     return _run

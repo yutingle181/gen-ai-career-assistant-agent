@@ -89,8 +89,11 @@ class BaseAgent:
         return [SystemMessage(content=self.system_message), *history]
 
     def respond(self, history: Sequence[BaseMessage], model: str | None = None,
-                max_tokens: int | None = None) -> str:
-        """生成一轮回复；工具调用开关打开时走 ReAct 闭环。"""
+                max_tokens: int | None = None, thread_id: str | None = None) -> str:
+        """生成一轮回复；工具调用开关打开时走 ReAct 闭环。
+
+        `thread_id` 透传给工具闭环，用于挂图级 checkpoint（同轮重试不重复执行工具）。
+        """
         if self.use_tool_calling:
             from ..graph.tool_loop import run_with_tools
 
@@ -100,11 +103,12 @@ class BaseAgent:
                 model=model,
                 max_tokens=max_tokens,
                 on_event=self.tool_event_listener,
+                thread_id=thread_id,
             )
         return llm_invoke(self.build_messages(history), model=model, max_tokens=max_tokens)
 
     def respond_stream(self, history: Sequence[BaseMessage], model: str | None = None,
-                       max_tokens: int | None = None):
+                       max_tokens: int | None = None, thread_id: str | None = None):
         """流式生成一轮回复（逐段产出文本）。"""
         if self.use_tool_calling:
             from ..graph.tool_loop import stream_with_tools
@@ -115,6 +119,7 @@ class BaseAgent:
                 model=model,
                 max_tokens=max_tokens,
                 on_event=self.tool_event_listener,
+                thread_id=thread_id,
             )
         from ..llm import llm_stream
 

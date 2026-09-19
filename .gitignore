@@ -11,6 +11,7 @@ dist/
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv-ci/
 venv/
 env/
 ENV/
@@ -37,7 +38,11 @@ Thumbs.db
 # Local/dev artifacts (not source)
 .codebuddy/
 .playwright-cli/
-.playwright-mcp/          # Playwright MCP 的快照 / 控制台日志
+# Playwright MCP 的快照 / 控制台日志（注意：注释必须独立成行，
+# 写成 `.playwright-mcp/  # 说明` 会把注释也算进模式，规则静默失效）
+.playwright-mcp/
+# 本地导出的运行日志归档（排查用，不入库）
+agent-logs.zip
 /home.yaml                # Playwright 可访问性快照（曾误提交，根锚定以免误伤配置 yaml）
 /home2.yaml
 /web_home.yaml

@@ -204,9 +204,12 @@ def test_render_report_appends_tool_section_and_renumbers(monkeypatch, tmp_path)
 
     with_tool = render_report(results, None, k=5, tool_comparison=_comparison())
     assert "## 3. 工具调用 A/B 对比" in with_tool
-    assert "## 4. 结论与优化建议" in with_tool
-    assert "## 5. 配置快照" in with_tool
+    # A/B 结果自带轨迹指标（P1-5）：报告自动多出一章，后续章节顺延
+    assert "## 4. 轨迹级评测" in with_tool
+    assert "## 5. 结论与优化建议" in with_tool
+    assert "## 6. 配置快照" in with_tool
     assert "tool_comparison" in with_tool
+    assert "trajectory" in with_tool
 
 
 def test_tool_conclusions_handle_empty_samples():
