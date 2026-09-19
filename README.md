@@ -219,7 +219,7 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 - **可关闭**：`.env` 中 `ENABLE_HUMAN_CONFIRM=false` 即恢复全自动直接定稿，便于对比演示。
 
 ### 依赖锁定与供应链安全
-- **锁定文件**：`requirements.lock.txt`（103 个包）与 `requirements-dev.lock.txt`（110 个，含开发依赖），由 `pip-compile` 编译生成，钉定全部**传递依赖**的精确版本。
+- **锁定文件**：`requirements.lock.txt`（101 个包）与 `requirements-dev.lock.txt`（107 个，含开发依赖），由 `pip-compile` 编译生成，钉定全部**传递依赖**的精确版本。
 - **为什么需要**：顶层声明的宽松约束（如 `pydantic>=2.7`）挡不住传递依赖在任意时刻升级。本项目真实踩过一次——pydantic 2.11 起 `model_dump_json(ensure_ascii=)` 被移除，保存评测集直接崩溃；锁定后这类「某天突然升级就崩」的问题变得可复现、可预期。
 - **更新方式**（改完 `requirements.txt` 后重新编译）：
   ```powershell
@@ -333,12 +333,10 @@ tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 - **模型额度是按模型独立计算的**：百炼免费额度用尽后返回 `HTTP 403 AllocationQuota.FreeTierOnly`（表现为「模型调用失败，请检查 .env」）。实测同一账号下 `qwen3.7-plus` / `qwen-plus` / `qwen-turbo-latest` 会耗尽，而 **`qwen-plus-latest` / `qwen-max` / `qwen3-max` / `qwen-flash` / `qwen-long` / `qwen-turbo` 仍可用**。换模型只需改 `.env` 的 `MODEL_NAME` / `MODEL_STRONG` / `MODEL_FAST`（用 `dotenv.set_key` 就地改写，不会动其它行）。本文 A/B 对比表是在 `qwen-turbo` 上跑的（两条路径钉同一模型，对比有效）；端到端实测在 `qwen-plus-latest` 上完成。
 - **纯文本模式下 A/B 测量的是链路成本**：`Tool_AB_Report` 不含答案质量指标，别把它当成「Function Calling 更准」的证据。
 - **Starlette 版本锁定**：`requirements.txt` 已固定 `starlette<1.0`——Starlette 1.x 会让 FastAPI 的 `include_router` 失效、导致全部业务路由丢失。安装后若 `openapi.json` 路径为空，请确认 starlette 版本。
-- **依赖漏洞告警的处置口径**（CI `audit` 任务）：当前 `pip-audit -r requirements.lock.txt` 命中 **32 条已知漏洞 / 9 个包**（`starlette` 8、`langgraph-checkpoint` 6、`langgraph` 与 `langgraph-sdk` 各 2+2、`langchain` / `langchain-core` / `langchain-text-splitters` / `langchain-openai` / `diskcache` 其余）。**刻意不做自动升级**，理由分三类：
-  1. **跨大版本（需单独立项）**：`langchain 0.3.30 → 1.x`、`langgraph 0.2.76 → 1.x`、`langgraph-checkpoint 2.1.2 → 3/4.x`、`langchain-text-splitters 0.3.11 → 1.x`、`langchain-openai 0.3.35 → 1.x` —— 整条 Agent 栈同时跨大版本，`bind_tools` / `ToolNode` / checkpointer 接口都要重新验证，不能塞进一次「让 CI 变绿」的提交；
-  2. **与既有硬约束冲突**：`starlette 0.52.1 → 1.x`，而上一条明确钉着 `starlette<1.0`（1.x 会让 `include_router` 失效）。要修就得连 FastAPI 一起升，并重跑路由冒烟（`openapi.json` 路径数 + 9 模式路由用例）；
-  3. **上游无修复版本**：`diskcache 5.6.3`（`PYSEC-2026-2447`）——只能等上游或换缓存实现。
-  CI 的口径是「**只告警不阻断，但绝不静默**」：命中时打一条 `::warning` 注释，并把完整明细写进该步骤的 **Job Summary**（流水线页面直接可查）。真正的升级按上面三类分别立项，改完必须跑全量测试 + `lock-verify` 再合。
-  第 1 类的**升级清单已立项**：见 [`docs/DEP_UPGRADE_PLAN.md`](docs/DEP_UPGRADE_PLAN.md)（含共存性实测、接口存活矩阵、分阶段步骤与命令级回归清单）。
+- **依赖漏洞告警的处置口径**（CI `audit` 任务）：`pip-audit -r requirements.lock.txt` 已从 **32 条 / 9 个包**降到 **12 条 / 2 个包**——原先的第 1 类（LangChain / LangGraph 跨大版本）**已完成升级并回归验证**（2026-09-20，过程与证据见 [`docs/DEP_UPGRADE_PLAN.md`](docs/DEP_UPGRADE_PLAN.md) §7）：全量 `pytest` 绿、离线检索指标与基线一致、工具调用 A/B 结构一致、故障注入复跑仍是「对照组失败率 100% + Failure Onset 1.0」、`openapi.json` 16 条业务路由齐全、目标包 `requires_python` 全为 `>=3.10`（CI 矩阵仍成立）。剩余两类**刻意保留**：
+  1. **与既有硬约束冲突**：`starlette 0.52.1 → 1.x`（10 条），而上一条明确钉着 `starlette<1.0`（1.x 会让 `include_router` 失效、业务路由全丢）。要修就得连 FastAPI 一起升，并重跑路由冒烟（`openapi.json` 路径数 + 9 模式路由用例）；
+  2. **上游无修复版本**：`diskcache 5.6.3`（`PYSEC-2026-2447`，2 条）——只能等上游或换缓存实现。
+  CI 的口径是「**只告警不阻断，但绝不静默**」：命中时打一条 `::warning` 注释，并把完整明细写进该步骤的 **Job Summary**（流水线页面直接可查）。升级后这个口径**不开倒车**：剩下 12 条都有书面理由，不许用「静默」把它变成 0。
 - **Windows / faiss**：若 `import faiss` 报 numpy 不兼容，执行 `pip install "numpy<2"`。
 - **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 91% 覆盖率的主要缺口所在。
 - 评测（`run_eval.py` 或界面「运行评测」）需要至少一个已建库的知识库，评测集会优先从知识库 chunk 反向生成。

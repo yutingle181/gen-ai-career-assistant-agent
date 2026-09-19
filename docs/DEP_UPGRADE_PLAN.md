@@ -83,3 +83,30 @@
    `max_tokens` 在签名里查不到却**实测可构造、属性生效**。判据必须是真实构造/调用（我差点据此报出一个假破口）。
 2. **"接口在不在"比"版本号变没变"可靠**：这次先用符号存活矩阵把范围从「整条栈要重写」收缩到
    「1 个可选包 + 行为复测」，才敢给出分阶段方案；反过来只盯版本号会高估工作量。
+
+## 7. 执行结果（2026-09-20 实测）
+
+阶段 1–4 已跑完，结论：**成本远低于立项时的估计** —— 放宽约束后**代码一行没改**，全量测试即全绿。
+
+| 验证项 | 结果 |
+| --- | --- |
+| 全量 `pytest`（一次性环境，`pytest 9.1.1`） | **退出码 0、全绿**（进度条无 F/E） |
+| 离线检索 4 组（`--no-judge`） | Recall@5 四组全 **100%**，MRR **0.649 / 0.750 / 0.812 / 0.812** —— 与基线表一致 |
+| 工具调用 A/B（15 条 / `qwen-turbo` / `--no-web`） | 两条路径成功率均 **100%**；FC 延迟 **−32.0%**、token **0.33x**（基线同条件实跑：−29.5% / 0.33x） |
+| 自主检索率 26.7% → 6.7%？ | **不是升级导致的**：基线环境今天同条件实跑也只有 13.3%，且历史 26.7% 那次是「联网开启」，本就不该比大小 |
+| 故障注入复跑 | 短路 **14** 次 + 最终降级 **3** 次；报告写明「对照组工具失败率 **100.0%**、Failure Onset **1.0**」——失败路径未被升级破坏 |
+| 路由冒烟 | `openapi.json` **16 条路径**，`/chat` `/chat/stream` `/knowledge` `/sessions` `/health` 等业务路由齐全 |
+| `/health` 字段对照 | 与基线逐字段一致（`runtime.checkpoint=memory`、skills 9 条、熔断为空）；唯一差异是新栈少了基线的 `LangChainPendingDeprecationWarning` |
+| 锁文件 | `pip-compile` 重编：主 **101** 包 / 开发 **107** 包；`pip install --dry-run --ignore-installed` 解析通过 |
+| **验收判据** | `pip-audit -r requirements.lock.txt`：**32 条 / 9 包 → 12 条 / 2 包**（剩 `starlette` 10 + `diskcache` 2，均有书面理由） |
+| 跨版本兼容 | 目标包 `requires_python` 全为 `>=3.10` → CI 的 3.10/3.11/3.12 矩阵仍成立 |
+
+两条如实说明：
+
+1. **`langgraph-checkpoint-sqlite` 是独立包**：新旧栈都不含它，`/health` 在两边都报 `checkpoint=memory`
+   ⇒ 本次**无行为退化**；要让「跨进程恢复」真正生效需另装该包（单独立项）。
+2. **`openai` 没被带走**：`pip-compile` 在目标约束下仍解出 `openai==2.54.0`（探针环境里升到 3.16.2 也跑绿）
+   ⇒ 实际升级面比立项时估计的更小；`httpx2` / `langchain-classic` / `langchain-protocol` / `langgraph-prebuilt` 属新增传递依赖。
+
+**未做（留给合并时决定）**：版本号 `v1.5.0 → v1.6.0` 需同步 `src/__init__.py`、`README.md`（含 §十 变更记录）、
+`docs/ENGINEERING_SUMMARY.md`、`docs/DEV_NOTES.md` 四处，属发布动作，不在待验证分支上先占版号。
