@@ -338,6 +338,7 @@ tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
   2. **与既有硬约束冲突**：`starlette 0.52.1 → 1.x`，而上一条明确钉着 `starlette<1.0`（1.x 会让 `include_router` 失效）。要修就得连 FastAPI 一起升，并重跑路由冒烟（`openapi.json` 路径数 + 9 模式路由用例）；
   3. **上游无修复版本**：`diskcache 5.6.3`（`PYSEC-2026-2447`）——只能等上游或换缓存实现。
   CI 的口径是「**只告警不阻断，但绝不静默**」：命中时打一条 `::warning` 注释，并把完整明细写进该步骤的 **Job Summary**（流水线页面直接可查）。真正的升级按上面三类分别立项，改完必须跑全量测试 + `lock-verify` 再合。
+  第 1 类的**升级清单已立项**：见 [`docs/DEP_UPGRADE_PLAN.md`](docs/DEP_UPGRADE_PLAN.md)（含共存性实测、接口存活矩阵、分阶段步骤与命令级回归清单）。
 - **Windows / faiss**：若 `import faiss` 报 numpy 不兼容，执行 `pip install "numpy<2"`。
 - **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 91% 覆盖率的主要缺口所在。
 - 评测（`run_eval.py` 或界面「运行评测」）需要至少一个已建库的知识库，评测集会优先从知识库 chunk 反向生成。
