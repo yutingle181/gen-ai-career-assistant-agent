@@ -35,13 +35,14 @@ class KnowledgeAgent(BaseAgent):
     def pipeline(self) -> RAGPipeline | None:
         return get_registry().get(self.kb_name) if self.kb_name else None
 
-    def build_tools(self) -> list:
-        """知识库场景只暴露知识库检索工具：联网结果会污染引用来源。"""
+    def build_tools(self, *, include_web: bool = True) -> list:
+        """知识库场景只暴露知识库检索工具：联网结果会污染引用来源。
+
+        `include_web` 在这里被强制为 False（本场景的既定约束），权限判定仍走基类。
+        """
         if not self.needs_tools or not self.kb_name:
             return []
-        from ..tools import get_agent_tools
-
-        return get_agent_tools(self.kb_name, include_web=False)
+        return super().build_tools(include_web=False)
 
     def prepare(self, query: str) -> str:
         """检查知识库是否已建库，给出明确中文提示。"""

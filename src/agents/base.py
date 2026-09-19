@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 
 from langchain_core.messages import BaseMessage, SystemMessage
 
-from .. import config
+from .. import config, metrics
 from ..llm import llm_invoke
 from ..logging_setup import get_logger
 from ..prompts.personas import get_persona
@@ -59,13 +59,24 @@ class BaseAgent:
         """
         return bool(config.ENABLE_TOOL_CALLING and self.needs_tools)
 
-    def build_tools(self) -> list:
-        """本场景可用的工具集（联网检索 + 知识库检索）。"""
+    def build_tools(self, *, include_web: bool = True) -> list:
+        """本场景可用的工具集（联网检索 + 知识库检索 + MCP）。
+
+        `include_web=False` 供「只允许查内部资料」的场景使用（避免联网结果污染引用来源）。
+
+        装配按**最小权限**：权限来自技能注册表（场景声明 ∩ 全局授予），
+        缺权限的工具**不会挂上**，而不是挂上之后再拦；判定与计数见 `tools._allowed`。
+        """
         if not self.needs_tools:
             return []
+        from ..skills import effective_permissions
         from ..tools import get_agent_tools
 
-        return get_agent_tools(self.kb_name)
+        return get_agent_tools(
+            self.kb_name,
+            include_web=include_web,
+            permissions=effective_permissions(self.mode),
+        )
 
     # ---------------------------------------------------------- 人设
     @property
@@ -80,6 +91,14 @@ class BaseAgent:
         if self.use_tool_calling:
             # 联网改由模型自主决定，避免「前置检索一次 + 模型再检索一次」的重复开销
             logger.info("工具调用已启用，跳过前置联网检索 | %s", self.mode)
+            return ""
+        from ..skills import has_permission
+
+        # 显式检索同样是"联网能力"，必须与工具装配走同一份授权判定，
+        # 否则收紧权限只会关掉一半（工具不挂载，但前置检索照发）
+        if not has_permission(self.mode, "net"):
+            metrics.incr("skill.permission_denied")
+            logger.warning("场景 %s 未获 net 权限，跳过前置联网检索", self.mode)
             return ""
         from ..tools import web_search
 

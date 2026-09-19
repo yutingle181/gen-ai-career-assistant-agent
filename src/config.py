@@ -172,6 +172,16 @@ ENABLE_TOOL_CIRCUIT_BREAKER: bool = _bool("ENABLE_TOOL_CIRCUIT_BREAKER", True)
 TOOL_BREAKER_THRESHOLD: int = _int("TOOL_BREAKER_THRESHOLD", 3)
 TOOL_BREAKER_COOLDOWN: int = _int("TOOL_BREAKER_COOLDOWN", 60)
 
+# ---------------------------------------------------------------- Skills（注册 / 版本 / 权限）
+# 全局授予的权限清单（逗号分隔）：net=联网检索、kb=内部知识库、mcp=外部 MCP 工具。
+# 生效权限 = 场景声明 ∩ 本清单。默认值与改造前的能力面一致，保证零回归；
+# 想收紧（例如只允许内部资料）就把它改成 kb。
+SKILL_PERMISSIONS: str = os.getenv("SKILL_PERMISSIONS", "net,kb,mcp").strip()
+# 禁用的 skill 名（逗号分隔，如 qa.general）；被禁用后该模式回退到默认场景
+SKILLS_DISABLED: str = os.getenv("SKILLS_DISABLED", "").strip()
+# 接口主版本不匹配时是否仍允许注册（默认严格：宁可少一个场景，也不带不确定的契约跑）
+SKILL_ALLOW_API_MISMATCH: bool = _bool("SKILL_ALLOW_API_MISMATCH", False)
+
 # ---------------------------------------------------------------- MCP（Model Context Protocol）
 # MCP 是**接入协议**：把外部 server 的工具接进本项目，与自有的 Tool / Function Calling 互补。
 # 默认关闭，且必须显式给配置文件（含要启动的命令）才会拉起进程 —— 不做任何隐式启动。

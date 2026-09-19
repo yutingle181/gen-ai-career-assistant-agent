@@ -539,17 +539,40 @@ def _safe_web_search_tool():
     return search_web
 
 
+def _allowed(permission: str, permissions: frozenset[str] | set[str] | None) -> bool:
+    """按生效权限判断某类工具是否允许挂载（`permissions=None` 表示不过滤）。"""
+    if permissions is None:
+        return True
+    if permission in permissions:
+        return True
+    from .skills.registry import PERMISSION_LABELS
+
+    metrics.incr("skill.permission_denied")
+    logger.warning(
+        "缺少 %s（%s）权限，不挂载对应工具",
+        permission,
+        PERMISSION_LABELS.get(permission, permission),
+    )
+    return False
+
+
 def get_agent_tools(
-    kb_name: str | None = None, *, include_web: bool = True, retrieval_cfg=None
+    kb_name: str | None = None,
+    *,
+    include_web: bool = True,
+    retrieval_cfg=None,
+    permissions: frozenset[str] | set[str] | None = None,
 ) -> list:
-    """返回可供 bind_tools 使用的工具列表（联网检索 + 指定知识库检索）。
+    """返回可供 bind_tools 使用的工具列表（联网检索 + 指定知识库检索 + MCP）。
 
     `include_web=False` 供「只允许查内部资料」的场景使用（如知识库问答），
     避免联网结果混入答案后污染引用来源。
     `retrieval_cfg` 用于把知识库工具钉在指定检索配置上（评测 A/B 对齐用）。
+    `permissions` 给定时按**最小权限**装配：缺权限的工具直接不挂载（并计数）；
+    传 `None` 表示不做权限过滤 —— 评测等直连场景保持原有行为不变。
     """
     tools: list = []
-    if include_web and config.ENABLE_WEB_SEARCH:
+    if include_web and config.ENABLE_WEB_SEARCH and _allowed("net", permissions):
         try:
             from langchain_community.tools import DuckDuckGoSearchResults  # noqa: F401
 
@@ -557,7 +580,7 @@ def get_agent_tools(
         except Exception as exc:  # noqa: BLE001
             logger.debug("搜索工具不可用：%s", exc)
 
-    if kb_name:
+    if kb_name and _allowed("kb", permissions):
         try:
             tools.append(_knowledge_search_tool(kb_name, retrieval_cfg))
         except Exception as exc:  # noqa: BLE001
@@ -565,7 +588,8 @@ def get_agent_tools(
 
     # MCP 外部工具（默认关闭，需显式配置）：接入的是**同一套工具闭环**，
     # 因此事件流、轨迹指标（Failure Onset）与熔断统计天然覆盖它们，不需要另起一套。
-    if config.ENABLE_MCP:
+    # 权限上单独一类（mcp）：外部工具的风险面比内置工具大，可以单独收口。
+    if config.ENABLE_MCP and _allowed("mcp", permissions):
         try:
             from .mcp.tools import build_mcp_tools
 
