@@ -48,6 +48,19 @@ ERROR_LABELS: dict[str, str] = {
     "disabled": "功能已关闭",
     "circuit_open": "熔断中",
     "unknown": "未知错误",
+    # MCP 外部工具的失败分类（与自研工具共用同一套标签与降级标记）
+    "mcp_error": "MCP 工具执行出错",
+    "mcp_unavailable": "MCP 服务端不可用",
+    "mcp_protocol": "MCP 协议错误",
+}
+
+#: 降级文案的渠道措辞：主语 + 免责要求。
+#: 为什么必须区分渠道：把知识库失败说成「没联网」、把外部工具失败说成「知识库里没有」，
+#: 都会让模型给出错误的免责声明，用户也无从排查。
+_CHANNEL_PHRASE: dict[str, tuple[str, str]] = {
+    "web": ("联网检索", "未联网核实"),
+    "kb": ("知识库检索", "未取得资料依据"),
+    "mcp": ("外部 MCP 工具", "该工具结果不可用"),
 }
 
 #: 参与熔断统计的工具名（与 bind_tools 暴露的名字一致，便于对照事件流）。
@@ -124,15 +137,11 @@ def degraded_text(error_kind: str, *, channel: str = "web") -> str:
     措辞要点：说明**没拿到资料**、要求**明说未核实**，并保留旧文案里的「暂不可用」表述
     （既有调用方与用例依赖这一措辞，且它足够准确）。
 
-    `channel` 决定主语与免责要求：`web`=联网检索（拿不到外部资料 → 说明未联网核实）、
-    `kb`=知识库检索（拿不到你的资料 → 说明未取得资料依据）。两者必须区分——
-    要是知识库检索失败却说成「没联网」，模型会给出错误的免责声明，用户也无从排查。
+    `channel` 决定主语与免责要求（见 `_CHANNEL_PHRASE`）：
+    `web`=联网检索、`kb`=知识库检索、`mcp`=外部 MCP 工具，三者不能混用。
     """
     label = ERROR_LABELS.get(error_kind, ERROR_LABELS["unknown"])
-    if channel == "kb":
-        subject, demand = "知识库检索", "未取得资料依据"
-    else:
-        subject, demand = "联网检索", "未联网核实"
+    subject, demand = _CHANNEL_PHRASE.get(channel, _CHANNEL_PHRASE["web"])
     if error_kind == "empty":
         sentence = f"{subject}没有返回结果，请基于已有信息作答，并说明{demand}。"
     else:
@@ -553,4 +562,14 @@ def get_agent_tools(
             tools.append(_knowledge_search_tool(kb_name, retrieval_cfg))
         except Exception as exc:  # noqa: BLE001
             logger.debug("知识库工具不可用：%s", exc)
+
+    # MCP 外部工具（默认关闭，需显式配置）：接入的是**同一套工具闭环**，
+    # 因此事件流、轨迹指标（Failure Onset）与熔断统计天然覆盖它们，不需要另起一套。
+    if config.ENABLE_MCP:
+        try:
+            from .mcp.tools import build_mcp_tools
+
+            tools.extend(build_mcp_tools())
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MCP 工具挂载失败（已跳过，不影响其他工具）：%s", exc)
     return tools

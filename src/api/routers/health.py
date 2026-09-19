@@ -8,6 +8,7 @@ from ... import config, faults, metrics, tasks
 from ...embeddings import check_embedding_health
 from ...graph.checkpoint import backend_name
 from ...llm import check_llm_health
+from ...mcp import snapshot as mcp_snapshot
 from ...rag.registry import get_registry
 from ...tools import get_breaker
 from ..schemas import HealthResponse
@@ -39,6 +40,8 @@ async def health():
             # 否则「为什么一直转圈」「点了停止到底停没停」只能靠猜。
             "tasks": tasks.snapshot(),
             "api_max_queue": config.API_MAX_QUEUE,
+            # MCP 外部工具状态（不含 command / env —— 那些可能含凭据）
+            "mcp": mcp_snapshot(),
         },
         metrics=metrics.snapshot(),
     )
