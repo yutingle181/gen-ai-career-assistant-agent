@@ -188,26 +188,17 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 
 ### 测试与覆盖率
 - **一键运行**：`pip install -r requirements-dev.txt` 后直接 `pytest`（`pyproject.toml` 中已配好 `testpaths` 与 `pythonpath`，不依赖调用方式）。
-- **用例规模**：**293 条**（pytest 实际收集数，含参数化展开），分散在 28 个测试文件中，全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，因此 CI 无需任何 API Key。
-- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **90%**（其中 `src/eval/runner.py` 已达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
-- **测试文件清单**：
-  - `test_api.py`（接口鉴权 / 限流 / SSE / 知识库检索）
-  - `test_graph_route.py`（9 模式路由与端到端冒烟）
-  - `test_tool_calling.py`（伪工具 + 伪模型：正常调用 / 达轮次上限收束 / 工具异常回灌 / 开关关闭走旧路径）
-  - `test_tool_eval.py`（双路径 A/B 汇总口径、失败样本容错、报告章节）
-  - `test_run_eval_cli.py`（`run_eval.py` 命令行参数契约、A/B 样本截断与参数传导、A/B 失败降级，全程打桩离线可跑）
-  - `test_jd_match.py` / `test_interview_review.py`（结构化产出、回退路径、缺上下文降级提示、前端字段对齐）
-  - `test_stream_persistence.py`（流式回复入栈 / 落库、`auto_finish` 语义、按轮清空工具事件）
-  - `test_ui_render.py`（新卡片渲染与 HTML 转义）
-  - `test_nodes.py`（LangGraph 节点与路由分支，本次新增，推高 `nodes.py` 至 98%）
-  - `test_rag.py` / `test_loaders.py` / `test_rerank.py` / `test_retrieval_cache.py`（解析、混合检索、重排、召回候选缓存）
-  - `test_eval.py`（评测指标与数据集生成）
-  - `test_session.py` / `test_storage.py`（单步会话推进、产物存取与越权防护）
-  - `test_hitl.py`（人机协同草稿→定稿全流程）
-  - `test_telemetry.py`（链路追踪 no-op 兜底）
-  - `test_safety.py`（注入拦截与脱敏）
-  - `test_cache.py` / `test_tools.py` / `test_llm.py` / `test_embeddings.py`（缓存、工具、模型调用、Embedding）
-  - `test_logging_setup.py`（日志脱敏与配置）
+- **用例规模**：**458 条**（pytest 实际收集数，含参数化展开；源码级 427 个用例函数），分散在 **39 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
+- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **91%**（4809 语句 / 漏 424；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
+- **测试文件清单**（39 个 `test_*.py`，按关注点分组）：
+  - 路由 / 节点：`test_graph_route.py`（9 模式路由与端到端冒烟）、`test_nodes.py`（节点与分支，`nodes.py` 覆盖率 98%）、`test_model_routing.py`（强弱模型分级路由）
+  - RAG 链路：`test_rag.py` / `test_loaders.py` / `test_rerank.py` / `test_retrieval_cache.py` / `test_embeddings.py` / `test_prompt_cache.py`
+  - 工具与**失败路径**：`test_tools.py` / `test_tool_retry.py`（超时 + 失败分级 + 重试）/ `test_circuit_breaker.py`（熔断）/ **`test_fault_injection.py`**（故障注入：注入序列可复现、重试阶梯、熔断短路、统一检索契约、对照路径不再崩、CLI 契约）
+  - 工具调用与评测：`test_tool_calling.py`（伪工具 + 伪模型：正常调用 / 达轮次上限收束 / 工具异常回灌 / 开关关闭走旧路径）、`test_tool_eval.py`（双路径 A/B 汇总口径与失败容错）、`test_run_eval_cli.py`（CLI 参数契约与 A/B 降级）、`test_traj_metrics.py`（轨迹级指标）、`test_eval.py`（指标与评测集生成）
+  - 会话与产物：`test_session.py` / `test_storage.py`（含越权防护）/ `test_stream_persistence.py`（流式入栈与落库）/ `test_checkpoint_resume.py`（单轮可恢复与幂等）/ `test_hitl.py`（草稿→定稿）/ `test_slot_memory.py`
+  - 接口与安全：`test_api.py`（鉴权 / 限流 / SSE / 知识库）、`test_safety.py`（注入拦截与脱敏）、`test_logging_setup.py`、`test_telemetry.py`（no-op 兜底）、`test_max_tokens.py`
+  - 近期新增能力：**`test_freshness.py`**（时间解析 / 过期标注 / 跨度提示 / 数据侧审计 / 检索层 meta 透传回归）、**`test_tasks.py`**（注册表语义 / 有界排队 429 与 503 / 取消三检查点 / 断连即取消 / 端到端关生成器）、**`test_mcp.py`**（真实协议握手 / 分页 / `isError` 与协议级 error 区分 / 超时 / `.cmd` 包装 / 名字改写 / schema / 工具上限 / 熔断 / 单端故障隔离 / 快照脱敏）、**`test_skills.py`**（注册表平价检查 / 版本兼容拒绝 / 最小权限过滤 / 显式检索同校验 / 禁用回退）
+  - 场景与界面：`test_jd_match.py` / `test_interview_review.py` / `test_metrics.py` / `test_ui_render.py` / `test_cache.py` / `test_llm.py`
   - `smoke_test.py`（整体冒烟）
 - **覆盖范围**：7 模式路由与端到端冒烟、FastAPI 鉴权 / 限流 / SSE / 知识库检索、内容安全（注入拦截与脱敏）、产物存储（含删除越权防护）、缓存与成本统计、文档解析失败降级、链路追踪 no-op 兜底、人机协同草稿→定稿全流程。
 - **补全测试时捕获并修复的真实缺陷**：`src/eval/dataset.py` 原用 `model_dump_json(ensure_ascii=False)`，pydantic 2.11 起不再接受该参数，保存评测集会直接崩溃（已改为 `json.dumps(..., ensure_ascii=False)`）。
@@ -260,18 +251,22 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 src/
 ├── config.py / llm.py / embeddings.py / models.py / cache.py / safety.py
 ├── state.py / storage.py / session.py / tools.py / logging_setup.py / telemetry.py
-├── model_routing.py / ui_style.py
+├── metrics.py / model_routing.py / ui_style.py
+├── faults.py / freshness.py / tasks.py     # 故障注入 / 数据时效 / 任务生命周期（排队与取消）
+├── skills/         # registry.py：场景注册 / 版本与接口兼容校验 / 最小权限
 ├── prompts/        # 分类 few-shot、9 个人设、RAG 提示词
 ├── rag/            # loaders/clean/split/vectorstore/bm25/fuse/rerank/pipeline/registry
 ├── agents/         # learning/interview/resume/jobsearch/knowledge/jd_match/interview_review + base
-├── graph/          # nodes.py / workflow.py（LangGraph 路由）/ tool_loop.py（Function Calling 子图）
+├── graph/          # nodes.py / workflow.py（LangGraph 路由）/ tool_loop.py（Function Calling 子图）/ checkpoint.py
+├── mcp/            # client.py（stdio JSON-RPC 客户端）/ tools.py（外部工具接入同一套闭环与治理）
 ├── api/            # db/schemas/deps/routers(main, chat, knowledge, sessions, health)
-└── eval/           # dataset/metrics/runner/report/tool_eval.py（双路径 A/B）
+└── eval/           # dataset/metrics/runner/report/tool_eval.py（双路径 A/B）/ trajectory.py（轨迹级指标）
 app.py              # Streamlit 入口
 run_web.ps1 / run_api.ps1 / run_eval.py
 docs/screenshots/   # 端到端验证截图（JD 评分卡 / 工具时间线 / 复盘卡片，含窄屏）
-tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会话 / 安全 / 缓存 / 工具 /
-                   #   人机协同 / 工具调用 / 双路径 A/B / 新场景 / 流式一致性 / 卡片渲染）
+docs/ENGINEERING_SUMMARY.md   # 工程总结（规模 / 架构 / 决策 / 缺陷清单 / 量化证据 / 边界）
+tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话 / 安全 / 缓存 / 工具 /
+                    #   故障注入 / 数据时效 / 任务生命周期 / MCP / Skills / 双路径 A/B / 流式一致性 …）
 .github/workflows/ci.yml   # CI 门禁（ruff lint / 跨版本 test 矩阵 / 锁文件校验 / 依赖漏洞扫描）
 ```
 
@@ -316,7 +311,7 @@ tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会�
 - chunk_size / overlap 怎么定？标题感知切分的收益。
 - Function Calling 与显式检索两条路径的取舍（含实测：延迟 -56%、token 0.22x，见 §四）。
 - 评测集怎么来的（不是拍脑袋），指标口径如何固定。
-- 覆盖率 90% 是怎么达成的？哪些分支最难测（如 OTel 真实 tracer 路径需 SDK）？
+- 覆盖率 91% 是怎么达成的？哪些分支最难测（如 OTel 真实 tracer 路径需 SDK）？
 
 ---
 
@@ -331,7 +326,7 @@ tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会�
   - **JD 匹配评分卡**：关联「AI 应用工程师」岗位 + 简历后提问，返回 **73/100**，分项 技能 80 / 经验 70 / 学历 0 / 项目 80，命中项 3 条、缺口项 3 条、面试准备重点 3 条，前端渲染为环形总分 + 分项进度条 + 命中/缺口双栏。
   - **面试复盘分区卡片**：提交一段模拟面试记录后返回 **65/100**（技术深度 60 / 问题结构 70 / 证据支撑 60），归档后在「面试复盘」页渲染为 四段式卡片：表现评分（4 枚环形指标）、追问链还原（Q1–Q4 步骤条）、薄弱点（警示色左边框）、改进动作（可勾选清单）。
   - **工具调用时间线**：`job_search` 模式下模型自主调用 `search_web`，前端渲染折叠摘要「调用了 1 个工具 · 10.1s」，展开显示工具名（等宽）/ 序号与耗时 / 入参摘要 / 返回摘要；本次联网实际超时降级，时间线如实显示「联网检索无结果或暂不可用，请基于已有信息作答」。
-- 测试套件：**293 条用例、覆盖率 90%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
+- 测试套件：**458 条用例、覆盖率 91%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
 
 ### 已知问题 / 注意
 - **必须配置有效 Key**：对话与知识库建库分别依赖 `OPENAI_API_KEY` 与 `EMBEDDING_API_KEY`（Embedding 默认走硅基流动 `BAAI/bge-m3`）。未配置或无效时仅能演示路由/建库/检索流程，真实生成会降级。
@@ -339,7 +334,7 @@ tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会�
 - **纯文本模式下 A/B 测量的是链路成本**：`Tool_AB_Report` 不含答案质量指标，别把它当成「Function Calling 更准」的证据。
 - **Starlette 版本锁定**：`requirements.txt` 已固定 `starlette<1.0`——Starlette 1.x 会让 FastAPI 的 `include_router` 失效、导致全部业务路由丢失。安装后若 `openapi.json` 路径为空，请确认 starlette 版本。
 - **Windows / faiss**：若 `import faiss` 报 numpy 不兼容，执行 `pip install "numpy<2"`。
-- **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 90% 覆盖率的主要缺口所在。
+- **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 91% 覆盖率的主要缺口所在。
 - 评测（`run_eval.py` 或界面「运行评测」）需要至少一个已建库的知识库，评测集会优先从知识库 chunk 反向生成。
 
 ---
