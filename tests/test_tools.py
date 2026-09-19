@@ -107,6 +107,7 @@ def test_get_agent_tools_web_import_failure_keeps_kb(monkeypatch):
     assert len(got) == 1  # 仅知识库工具
 
 
+
 def test_get_agent_tools_kb_failure_keeps_web(monkeypatch):
     import langchain_community.tools as lct
 
