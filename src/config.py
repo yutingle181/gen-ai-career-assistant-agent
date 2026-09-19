@@ -172,6 +172,19 @@ ENABLE_TOOL_CIRCUIT_BREAKER: bool = _bool("ENABLE_TOOL_CIRCUIT_BREAKER", True)
 TOOL_BREAKER_THRESHOLD: int = _int("TOOL_BREAKER_THRESHOLD", 3)
 TOOL_BREAKER_COOLDOWN: int = _int("TOOL_BREAKER_COOLDOWN", 60)
 
+# ---------------------------------------------------------------- MCP（Model Context Protocol）
+# MCP 是**接入协议**：把外部 server 的工具接进本项目，与自有的 Tool / Function Calling 互补。
+# 默认关闭，且必须显式给配置文件（含要启动的命令）才会拉起进程 —— 不做任何隐式启动。
+ENABLE_MCP: bool = _bool("ENABLE_MCP", False)
+# 配置文件路径，格式为各客户端通用的 {"mcpServers": {"name": {"command": ..., "args": [...], "env": {...}}}}
+MCP_CONFIG_PATH: str = os.getenv("MCP_CONFIG_PATH", "").strip()
+# 握手时声明的协议版本；服务端可回一个它支持的版本，客户端会记录协商结果
+MCP_PROTOCOL_VERSION: str = os.getenv("MCP_PROTOCOL_VERSION", "2025-06-18").strip()
+# 单次 MCP 请求（含工具调用）的最长等待秒数：等不到就降级，不拖死对话
+MCP_TIMEOUT: float = _float("MCP_TIMEOUT", 20.0)
+# 最多挂载多少个 MCP 工具：函数定义会进每一轮 prompt，无上限地全挂会挤爆上下文
+MCP_MAX_TOOLS: int = _int("MCP_MAX_TOOLS", 12)
+
 # ---------------------------------------------------------------- 任务生命周期（取消 / 排队）
 # 排队上限：超出的请求立刻 429，而不是无限期挂着（限流按 IP 计数，解决不了
 # 「一个客户端并发打满队列」的问题）。

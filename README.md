@@ -1,6 +1,6 @@
 # GenAI Career Assistant · RAG + Agent 职业引擎
 
-> 当前版本 **v1.3.0** · 变更记录见 [§十](#十版本与变更记录)
+> 当前版本 **v1.4.0** · 变更记录见 [§十](#十版本与变更记录)
 
 ![GenAI 职业助手创意海报](docs/poster.png)
 
@@ -348,7 +348,21 @@ tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会�
 
 版本号唯一来源：`src/__init__.py::__version__`（FastAPI 的 `openapi.info.version` 直接引用它，避免两处漂移）。
 
-### v1.3.0（当前）失败路径 · 数据时效 · 任务生命周期
+### v1.4.0（当前）MCP 接入
+
+**新增能力（默认关闭，必须显式配置才启用，不做任何隐式启动）**
+
+- **MCP 客户端（`src/mcp/`，零新增依赖，手写而非引 SDK）**：按规范实现 stdio 传输（换行分隔 JSON-RPC 2.0）+ `initialize` 握手（版本协商）+ `tools/list`（含 `nextCursor` 分页）+ `tools/call`；关停按规范走「关 stdin → 等退出 → 必要时终止」。能力边界如实：只做 **tools** 能力与 **stdio** 传输，单连接内串行调用。
+- **接进同一套工具闭环**：外部工具与自有工具**同契约** —— 失败沿用 `【工具降级:xxx】` 标记与分类（`mcp_error`＝工具 `isError`、`mcp_unavailable`、`mcp_protocol`、`timeout`、`circuit_open`），因此工具调用事件流、轨迹指标（Failure Onset）与熔断统计**自动覆盖** MCP 工具。配置：`ENABLE_MCP` / `MCP_CONFIG_PATH`（兼容通用 `{"mcpServers": {...}}` 格式）/ `MCP_TIMEOUT` / `MCP_MAX_TOOLS` / `MCP_PROTOCOL_VERSION`。
+- **两处工程细节（都是踩过的）**：① MCP 工具名允许含 `/`（如 `get/weather`），而模型侧 function name 只接受 `[A-Za-z0-9_-]`，统一改写成 `mcp_<server>_<tool>` 并在调用时映射回原名；② Windows 上 `.cmd` / `.bat`（如 `npx.cmd`）必须经 `cmd.exe /c` 才能 spawn。
+- **安全**：`/health` 只暴露服务端名字、连接状态与协议版本，**不含 command 与 env**（env 常放凭据）。
+
+**实测证据**
+
+- 离线：新增 **`tests/test_mcp.py`（21 个用例）**，跑的是真实协议 —— 握手与版本协商、分页、`isError` 与协议级 error 的区别、超时降级、`.cmd` 包装、名字改写与原名映射、输入 schema 生成、工具数上限、熔断短路、单个服务端故障不牵连其他、快照不泄露凭据。
+- **真实第三方互操作**：用官方 `@modelcontextprotocol/server-filesystem`（`npx.cmd` 拉起，`serverInfo=secure-filesystem-server` 0.2.0）→ 协商协议 `2025-06-18`、发现 **14 个工具**、经本项目包装后调用 `mcp_fs_list_allowed_directories` 返回真实目录清单；`MCP_MAX_TOOLS=12` 时按上限裁剪为 12 个（函数定义要进每轮 prompt，不能无上限全挂）。
+
+### v1.3.0 失败路径 · 数据时效 · 任务生命周期
 
 **新增能力（同样带开关，关闭即零回归）**
 
