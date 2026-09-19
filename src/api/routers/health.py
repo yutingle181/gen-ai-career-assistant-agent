@@ -10,6 +10,7 @@ from ...graph.checkpoint import backend_name
 from ...llm import check_llm_health
 from ...mcp import snapshot as mcp_snapshot
 from ...rag.registry import get_registry
+from ...skills import snapshot as skills_snapshot
 from ...tools import get_breaker
 from ..schemas import HealthResponse
 
@@ -42,6 +43,8 @@ async def health():
             "api_max_queue": config.API_MAX_QUEUE,
             # MCP 外部工具状态（不含 command / env —— 那些可能含凭据）
             "mcp": mcp_snapshot(),
+            # 技能注册表与授权：注册了哪些场景、各自什么版本、被授予了哪些权限
+            "skills": skills_snapshot(),
         },
         metrics=metrics.snapshot(),
     )
