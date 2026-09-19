@@ -68,5 +68,15 @@ class MockInterviewAgent(BaseAgent):
             logger.warning("结构化面评失败，回退为普通生成：%s", exc)
         return None
 
-    def respond(self, history: Sequence) -> str:
-        return super().respond(history)
+    def respond(self, history: Sequence, model: str | None = None,
+                max_tokens: int | None = None, thread_id: str | None = None) -> str:
+        """转发到基类。
+
+        修掉一个既有隐患：这里此前只写 `respond(self, history)`，把基类的
+        `model` / `max_tokens` 两个关键字参数丢掉了 —— 会话层是按关键字调用的，
+        于是模拟面试一旦走会话链路就会 TypeError，被兜底成「模型调用失败」。
+        现在三个参数全部透传（`thread_id` 用于 checkpoint 复用）。
+        """
+        return super().respond(
+            history, model=model, max_tokens=max_tokens, thread_id=thread_id
+        )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, START, StateGraph
 
+from .. import config
 from ..logging_setup import get_logger
 from ..state import State
 from .nodes import (
@@ -117,7 +118,11 @@ def route_only(query: str) -> dict:
     分类失败时不影响主流程：返回 qa 模式作为安全默认。
     """
     try:
-        return get_app().invoke({"query": query})
+        # 显式传图级递归上限：路由图本身只有两级，但把上限写死在这里，
+        # 可以避免任何后续扩图（新增并行分支 / 自环）悄悄退化到 LangGraph 默认值。
+        return get_app().invoke(
+            {"query": query}, config={"recursion_limit": max(1, config.TOOL_RECURSION_LIMIT)}
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("路由失败，回退为问答模式：%s", exc)
         return {"mode": "qa", "message": "（路由异常，已回退为问答模式）", "category": "learning"}

@@ -15,7 +15,15 @@ from ...safety import check_input, safe_output
 from ...session import SessionManager
 from ...state import MODE_LABELS
 from .. import db
-from ..deps import build_retrieval_cfg, get_semaphore, get_session_manager, new_session_id, put_session, resolve_kb
+from ..deps import (
+    build_retrieval_cfg,
+    get_semaphore,
+    get_session_manager,
+    new_session_id,
+    put_session,
+    resolve_kb,
+    restore_session,
+)
 from ..schemas import ChatRequest, ChatResponse, FinishRequest
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -32,10 +40,18 @@ def _resolve_mode(req: ChatRequest) -> str:
 
 
 def _ensure_session(req: ChatRequest) -> tuple[str, SessionManager, bool]:
-    """获取或新建会话，返回 (session_id, manager, is_new)。"""
+    """获取 / 恢复 / 新建会话，返回 (session_id, manager, is_new)。"""
     if req.session_id:
         manager = get_session_manager(req.session_id)
         if manager is not None:
+            return req.session_id, manager, False
+        # 进程内没有该会话：先尝试从持久化恢复（进程重启、多 worker 场景）
+        manager = restore_session(req.session_id)
+        if manager is not None:
+            # 岗位 / 简历这类 user_context 每轮都可能更新，恢复后按本次请求覆盖
+            if req.user_context:
+                manager.user_context = req.user_context
+                manager.agent.extra_context = req.user_context
             return req.session_id, manager, False
 
     mode = _resolve_mode(req)
@@ -43,8 +59,10 @@ def _ensure_session(req: ChatRequest) -> tuple[str, SessionManager, bool]:
     cfg = build_retrieval_cfg(req.top_k, req.reranker, req.use_bm25, req.use_vector)
     manager = SessionManager(mode, kb_name=kb_name, retrieval_cfg=cfg, user_context=req.user_context)
     sid = req.session_id or new_session_id()
+    manager.session_id = sid  # 供产物幂等命名 + 单轮工具闭环的 checkpoint thread 键
+    if db.get_session(sid) is None:
+        db.create_session(sid, mode, kb_name or "")
     put_session(sid, manager)
-    db.create_session(sid, mode, kb_name or "")
     logger.info("新建会话 | id=%s mode=%s", sid, mode)
     return sid, manager, True
 

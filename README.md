@@ -348,7 +348,26 @@ tests/              # 28 个测试文件（路由 / 节点 / RAG / 评测 / 会�
 
 版本号唯一来源：`src/__init__.py::__version__`（FastAPI 的 `openapi.info.version` 直接引用它，避免两处漂移）。
 
-### v1.1.0（当前）
+### v1.2.0（当前）生产级补强
+
+**新增能力（全部带开关，关闭即零回归）**
+
+- **终止兜底两层**：新增图级 `TOOL_RECURSION_LIMIT`，并捕获 `GraphRecursionError` → 走一次「图外强制收束」，保证用户拿到阶段性结论而不是异常栈。
+- **工具失败分级**：同通道退避重试 → 换参数（简化检索式）→ 换通道（DuckDuckGo backend）→ 如实降级；降级文本带统一标记 `【工具降级:kind】`，事件流改为 `ok=false` + `error_kind`，Prompt 硬性要求把「未联网核实」写进答案。
+- **数据时效**：工具结果注入**抓取时间**，知识库片段带**文档时间**（查不到就显式写「未知」）；人设新增资料时效规则，禁止把过期资料当作最新事实陈述。
+- **可恢复性**：会话级 `deps.restore_session`（重启后带同一 `session_id` 继续，历史 / 转写 / 产物路径从 SQLite 重建）；单轮级 LangGraph checkpoint（`thread_id = 会话:轮次`，同一轮重试命中已有 checkpoint 时**不重复执行模型与工具**）；产物按幂等键命名，重放只覆盖同一文件。
+- **轨迹级评测**：`eval/trajectory.py` 提供 **TaskSuccessRate**（按场景结构标记 + 工具事件判定，不额外调用模型，可复现）与 **Failure Onset**（最早失败发生在第几步）+ 失败原因分布，并自动进入评测报告新章节。
+- **槽位记忆（默认关闭）**：城市 / 岗位方向 / 时间范围 / 学历单独记录并每轮裁剪后重注入，避免「只要广东」这类硬约束被 `trim_messages` 裁掉。
+- **熔断与指标**：`CircuitBreaker`（连续失败阈值 → 冷却 → 半开）；`src/metrics.py` 提供工具失败率 / 熔断拦截率 / 超轮次率 / 递归终止率；`/health` 一处可见运行时开关、checkpoint 后端与指标快照。
+
+**质量**
+
+- 本轮新增 **6 个测试文件 / 51 个用例**（工具失败分级、checkpoint 恢复与幂等、轨迹指标、槽位记忆、熔断、指标），`tests/` 用例函数累计 **326 个**；`ruff check src tests` **0 违规**。
+- `tests/conftest.py` 统一隔离进程内单例（熔断器 / 指标计数器），修掉一处「按随机顺序才失败」的脏状态泄漏。
+- 顺带修掉 2 个既有隐性缺陷：`MockInterviewAgent.respond` 丢掉 `model / max_tokens`（模拟面试走会话链路必然 `TypeError`，被兜底成「模型调用失败」）、子类覆写吞掉会话参数；并新增契约测试「所有场景 Agent 的 `respond` / `respond_stream` 必须接受 `model / max_tokens / thread_id`」。
+- 已知既有失败 1 条：`tests/smoke_test.py::test_route_classifies_expected_mode["我要根据这份 JD 改简历"]` 期望 `resume`、实际稳定判为 `jd_match`——在 HEAD 基线下同样失败（真实模型分类口径问题），与本次改动无关，未纳入本次修复范围。
+
+### v1.1.0
 
 **新增能力**
 

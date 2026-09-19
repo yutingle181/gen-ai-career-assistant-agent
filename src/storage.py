@@ -34,11 +34,23 @@ TYPE_LABELS = {
 DRAFT_SUFFIX = "_draft"
 
 
-def save_file(data: str, filename: str) -> str:
-    """保存 Markdown 产物，返回文件路径。"""
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+def save_file(data: str, filename: str, key: str | None = None) -> str:
+    """保存 Markdown 产物，返回文件路径。
+
+    `key` 是幂等键（调用方传会话 id）：传入后文件名稳定为 `{类型}_{key}.md`，
+    于是「同一会话重复收尾」——重试、恢复后再次 finish/confirm——只会覆盖同一个文件，
+    不会在 Agent_output 里堆出一串内容相同的副本。不传 key 时保持原有的时间戳命名。
+
+    刻意**不用**「临时文件 + os.replace 原子改名」：本机安全过滤驱动禁止 D 盘
+    MoveFile（Vite 预构建与 Maven 资源拷贝都因此踩过坑），改名式写入在这里反而更不可靠。
+    """
     safe = re.sub(r"[^\w\u4e00-\u9fa5\-]+", "_", filename).strip("_") or "output"
-    file_path = config.OUTPUT_DIR / f"{safe}_{timestamp}.md"
+    if key:
+        stable = re.sub(r"[^\w\u4e00-\u9fa5\-]+", "_", key).strip("_") or "session"
+        file_path = config.OUTPUT_DIR / f"{safe}_{stable}.md"
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        file_path = config.OUTPUT_DIR / f"{safe}_{timestamp}.md"
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(data or "")
     logger.info("产物已保存 | %s", file_path.name)

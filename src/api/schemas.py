@@ -76,6 +76,12 @@ class HealthResponse(BaseModel):
     embedding_detail: str = ""
     knowledge_bases: list[str] = Field(default_factory=list)
     config: dict = Field(default_factory=dict)
+    # 运行时状态（P1-4 / P2-6 / P2-7）：checkpoint 后端、熔断器、会话恢复与槽位记忆开关。
+    # 放在 /health 里的理由：这些开关直接决定「上一轮为什么没检索」「重启后能不能接着聊」，
+    # 排查时应该在同一个地方看到，而不是翻三份日志。
+    runtime: dict = Field(default_factory=dict)
+    # 进程内指标快照（工具失败率 / 超轮次率 / 熔断拦截率等）
+    metrics: dict = Field(default_factory=dict)
 
 
 class CostSummary(BaseModel):

@@ -6,6 +6,8 @@ Agent 内部不再持有循环，因此同一套逻辑可同时服务 Streamlit 
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from datetime import datetime
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, trim_messages
@@ -21,6 +23,22 @@ from .storage import DRAFT_SUFFIX, save_file
 from .telemetry import span
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------- 槽位抽取规则（P2-6）
+# 只抽「可枚举的硬约束」：城市 / 岗位方向 / 时间范围 / 学历。
+# 刻意不去理解任意语义——规则命中的部分准确、可复现、零成本，
+# 剩下开放语义交给模型自己从对话里读（这也是它默认关闭、需要 A/B 验证的原因）。
+SLOT_CITY_KEYWORDS: tuple[str, ...] = (
+    "北京", "上海", "广州", "深圳", "杭州", "长沙", "成都", "武汉", "南京", "西安",
+    "苏州", "合肥", "厦门", "天津", "重庆", "郑州", "青岛", "南昌", "福州", "远程", "remote",
+)
+
+SLOT_PATTERNS: dict[str, str] = {
+    # 允许一个前导英文限定词（如「Java 后端工程师」里的 Java），否则按空格切分会丢信息
+    "岗位方向": r"((?:[A-Za-z]+\s+)?[\u4e00-\u9fa5]{2,10}(?:工程师|开发|算法|产品经理|研究员|测试|运维))",
+    "时间范围": r"(秋招|春招|校招|社招|暑期实习|\d{4}\s*年(?:\s*\d{1,2}\s*月)?|\d{1,2}\s*个?月内?)",
+    "学历": r"(博士|硕士|研究生|本科|大专)",
+}
 
 
 def _user_context_message(text: str) -> SystemMessage:
@@ -69,6 +87,11 @@ class SessionManager:
         # 该列表始终为空，既有行为零变化。
         self.tool_events: list[dict] = []
         self.agent.tool_event_listener = self.tool_events.append
+        # 会话标识（由 API 层注入）：用于产物幂等命名，以及作为单轮工具闭环的 checkpoint 隔离键
+        self.session_id: str = ""
+        # 槽位记忆（P2-6）：关键约束单独存一份，与「聊天历史」解耦
+        self.slots: dict[str, str] = {}
+        self.slot_updates: list[str] = []
         self.history: list = []
         self.record: list[str] = []
         self.started = False
@@ -80,6 +103,41 @@ class SessionManager:
         self.draft_path: str | None = None  # 草稿产物路径
         self.high_risk_topic: str = ""  # 命中的高风险话题（空 = 未命中）
         self._confirmed = False  # 是否已人工确认过
+
+    # ------------------------------------------------------------ 恢复（P1-4）
+    def restore(self, messages: Sequence[tuple[str, str]]) -> None:
+        """用持久化的消息重建会话（进程重启后的恢复入口）。
+
+        恢复范围刻意限定在「会话级状态」：历史消息 + 转写记录（产物正文由它拼装）。
+        不去假装恢复「执行中那一轮」的图状态——那是 checkpoint 的职责，
+        两者职责不重叠，也就不需要互相猜测对方的状态格式。
+        """
+        for role, content in messages:
+            text = content or ""
+            if role == "user":
+                self.history.append(HumanMessage(content=text))
+                self.record.append(f"**用户**：{text}\n")
+            elif role == "assistant":
+                self.history.append(AIMessage(content=text))
+                self.record.append(f"\n**助手**：{text}\n")
+        self.started = bool(self.history)
+        if config.ENABLE_SLOT_MEMORY:
+            self._update_slots(self.history)  # 恢复的对话同样要能把约束找回来
+
+    @property
+    def turn_index(self) -> int:
+        """已完成的轮数（按助手回复条数计）。
+
+        用它当 checkpoint 的 thread 键有个关键好处：一轮**还在执行中**时索引不变，
+        于是「进程中途挂掉后带着同一 session 重发」会命中同一个 checkpoint 续跑；
+        而一轮正常结束后索引递增，下一轮一定是全新 thread，不会误撞上一轮的旧结果。
+        """
+        return sum(1 for m in self.history if isinstance(m, AIMessage))
+
+    @property
+    def tool_thread_id(self) -> str | None:
+        """单轮工具闭环的 checkpoint 隔离键；没有会话 id（如本地 Streamlit 用法）时为 None。"""
+        return f"{self.session_id}:t{self.turn_index}" if self.session_id else None
 
     # ------------------------------------------------------------ 生命周期
     def reset_tool_events(self) -> None:
@@ -235,12 +293,14 @@ class SessionManager:
 
         content = self._build_content()
         if self.requires_confirmation:
-            self.draft_path = save_file(content, f"{self.agent.artifact}{DRAFT_SUFFIX}")
+            self.draft_path = save_file(
+                content, f"{self.agent.artifact}{DRAFT_SUFFIX}", key=self.session_id or None
+            )
             self.awaiting_confirmation = True
             logger.info("草稿已产出，等待人工确认 | mode=%s | %s", self.mode, self.draft_path)
             return self.draft_path
 
-        self.artifact_path = save_file(content, self.agent.artifact)
+        self.artifact_path = save_file(content, self.agent.artifact, key=self.session_id or None)
         self.finished = True
         logger.info("会话已导出 | mode=%s | %s", self.mode, self.artifact_path)
         return self.artifact_path
@@ -254,7 +314,9 @@ class SessionManager:
             return self.artifact_path
 
         self._confirmed = True
-        self.artifact_path = save_file(self._build_content(), self.agent.artifact)
+        self.artifact_path = save_file(
+            self._build_content(), self.agent.artifact, key=self.session_id or None
+        )
         self.finished = True
         self.awaiting_confirmation = False
         logger.info("已人工确认定稿 | mode=%s | %s", self.mode, self.artifact_path)
@@ -288,7 +350,9 @@ class SessionManager:
             )
             max_tokens = self._max_tokens_for()
             try:
-                reply = self.agent.respond(trimmed, model=model, max_tokens=max_tokens)
+                reply = self.agent.respond(
+                    trimmed, model=model, max_tokens=max_tokens, thread_id=self.tool_thread_id
+                )
             except Exception as exc:  # noqa: BLE001
                 sp.set_attribute("error", True)
                 sp.set_attribute("error.type", type(exc).__name__)
@@ -327,7 +391,9 @@ class SessionManager:
             max_tokens = self._max_tokens_for()
             buffer: list[str] = []
             try:
-                for piece in self.agent.respond_stream(trimmed, model=model, max_tokens=max_tokens):
+                for piece in self.agent.respond_stream(
+                    trimmed, model=model, max_tokens=max_tokens, thread_id=self.tool_thread_id
+                ):
                     if not piece:
                         continue
                     buffer.append(piece)
@@ -369,7 +435,49 @@ class SessionManager:
             )
         if self.user_context:
             trimmed.insert(0, _user_context_message(self.user_context))
+        # 槽位记忆（P2-6，默认关闭）：在裁剪**之后**注入，保证「目标城市：广东」这类
+        # 硬约束不会随早期发言被裁掉。放在画像之后，语义上是「先背景、再约束」。
+        if config.ENABLE_SLOT_MEMORY:
+            self._update_slots(trimmed)
+            slots_message = self._slots_message()
+            if slots_message is not None:
+                trimmed.insert(1, slots_message)
         return trimmed
+
+    # ------------------------------------------------------------ 槽位记忆
+    def _update_slots(self, messages: Sequence) -> None:
+        """从历史里的**用户**发言累积关键约束（新值覆盖旧值）。
+
+        为什么需要它：`trim_messages` 会把早期发言裁掉，「只要广东」这种硬约束
+        一旦被裁，后面几轮模型就看不见了——记忆不该依赖"还没被裁掉"。
+        为什么用规则而不是再调一次模型：槽位每轮都要重放，多一次模型调用
+        既慢又不可复现；规则命中的是可枚举的硬约束，足够用。
+        """
+        for message in messages:
+            if not isinstance(message, HumanMessage):
+                continue
+            text = str(getattr(message, "content", "") or "")
+            for city in SLOT_CITY_KEYWORDS:
+                if city in text:
+                    self._set_slot("目标城市", city)
+            for name, pattern in SLOT_PATTERNS.items():
+                match = re.search(pattern, text)
+                if match:
+                    self._set_slot(name, match.group(1).strip())
+
+    def _set_slot(self, key: str, value: str) -> None:
+        """写入槽位；值有变化时留一条变更记录（便于排查"模型为什么这么回答"）。"""
+        if not value or self.slots.get(key) == value:
+            return
+        self.slots[key] = value
+        self.slot_updates.append(f"{key}={value}")
+
+    def _slots_message(self) -> SystemMessage | None:
+        """把槽位渲染为一条 SystemMessage；无槽位或开关关闭时返回 None。"""
+        if not (config.ENABLE_SLOT_MEMORY and self.slots):
+            return None
+        items = "；".join(f"{k}：{v}" for k, v in self.slots.items())
+        return SystemMessage(content=f"【会话约束（每轮都必须遵守）】{items}")
 
     # ------------------------------------------------------------ 只读属性
     @property
