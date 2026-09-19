@@ -4,3 +4,9 @@
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 sentence-transformers>=3.0
+
+# 可选依赖：跨进程的图级 checkpoint（P1-4 可恢复性）。
+# 不装也能跑：`src/graph/checkpoint.py` 会自动降级为进程内 InMemorySaver
+# （重试同一轮仍不会重复执行工具），只是进程重启后无法从图状态续跑。
+# 装上之后 thread checkpoint 落 SQLite（默认 data/checkpoints.sqlite），重启也能续。
+langgraph-checkpoint-sqlite>=2.0
