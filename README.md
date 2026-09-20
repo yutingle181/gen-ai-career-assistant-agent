@@ -6,7 +6,7 @@
 
 一个**可运行、可演示、可度量**的 GenAI 职业助手工程：左边是「LangGraph 多 Agent 职业助手」（教程 / 答疑 / 简历 / 面试题 / 模拟面试 / 职位搜索 / **JD 匹配诊断** / **面试复盘**），右边是「企业知识库 RAG 引擎」（上传文档 → 混合检索 → 重排 → 带引用问答）。对外同时提供 **Streamlit 演示界面**与 **FastAPI 服务接口**，并内置 **效果评测体系**（Recall@5 / MRR / 命中率 / 幻觉率 + A-B 对比报告），以及**显式检索 vs Function Calling 双路径 A/B**。
 
-> 目标：一份能直接写进简历、扛得住面试官追问（召回率多少？怎么优化的？为什么这么切分？）的工程化作品。
+> 目标：一个**可运行、可演示、可度量**的工程化作品——每个能力都有对应的指标、开关与失败路径处理，而不是只跑通一次的 Demo。
 
 ---
 
@@ -304,7 +304,7 @@ tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 
 ---
 
-## 八、面试加分点（详见 `INTERVIEW_NOTES.md`）
+## 八、设计与取舍问答（FAQ）
 
 - 为什么选混合检索 + RRF？召回率提升多少？
 - 为什么用 LLM Rerank 而非 CrossEncoder（无 GPU 约束）？
@@ -440,7 +440,7 @@ tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 - **两个新场景**：`jd_match`（JD 匹配诊断：总分 / 分项 / 命中项 / 缺口项 / 面试准备重点）与 `interview_review`（面试复盘：表现评分 / 追问链 / 薄弱点 / 改进动作），均为 Pydantic 结构化输出 + Markdown 渲染，前端配评分卡与四段式卡片。
 - **双路径 A/B 评测**：`src/eval/tool_eval.py` + 报告新增章节，产出延迟 / token / 轮次 / 成功率对比（`Agent_output/Tool_AB_Report_*.md`）。
 
-**修复**（联调中发现的跨端缺陷，详见 `INTERVIEW_NOTES.md` §五）
+**修复**（联调中发现的跨端缺陷，均有回归用例）
 
 - 雪花 ID 在 JS 侧被四舍五入导致 `user_context` 静默注入失败 → jobseeker 侧 `JacksonConfig` 统一 Long→String。
 - `/chat/stream` 绕过会话层，完整回复未进 `history` / `record` → 改为 `SessionManager.start_stream/step_stream(auto_finish=False)`。
