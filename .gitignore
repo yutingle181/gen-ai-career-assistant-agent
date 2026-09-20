@@ -35,6 +35,13 @@ Thumbs.db
 # Env (keys must not be committed)
 .env
 
+# 私人材料 / 含他人隐私的样例：只存本机、不入库（副本放在仓库外）
+INTERVIEW_NOTES.md
+RESUME_TAILORING*.md
+*简历*.md
+# 该 notebook 内含第三方真实简历（姓名/邮箱/手机）样例数据，且未被任何代码或文档引用
+agent_hackathon_genAI_career_assistant.ipynb
+
 # Local/dev artifacts (not source)
 .codebuddy/
 .playwright-cli/
