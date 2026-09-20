@@ -1,6 +1,6 @@
 """Embedding 抽象层：默认云端 OpenAI 兼容 /embeddings，可选本地 HuggingFace。
 
-选型理由（写进简历/面试话术）：
+选型理由：
 - 本地 bge-m3 需 torch（1-2GB）且 CPU 推理慢，对无独显机器不友好；
 - 云端接口 + faiss-cpu 可在 10 分钟内装完并跑通；
 - 通过 EmbeddingFactory 抽象，两者可一行配置切换，业务代码零改动。
