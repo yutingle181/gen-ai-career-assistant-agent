@@ -1,0 +1,32 @@
+version: 2
+# 依赖更新策略：
+# - minor / patch 归组为一条 PR（降噪）；major 单独开 PR（需人看一眼再合、并重跑评测）。
+# - 每周一检查一次。
+# - 注意：Dependabot 只能改 requirements.txt 里的**宽松约束**与 workflow 里的 actions，
+#   **不能**更新 pip-compile 编译出的 requirements*.lock.txt（那是生成物）。
+#   锁文件仍按 README §四 的流程手工重编：改完 requirements.txt → pip-compile → commit → CI lock-verify。
+updates:
+  # Python 依赖（requirements.txt / requirements-dev.txt）
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "python"]
+    groups:
+      pip-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # CI 自身：workflow 里用到的 actions（版本过期会触发 Node 运行时弃用告警）
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies", "ci"]
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
