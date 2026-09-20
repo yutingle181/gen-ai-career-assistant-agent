@@ -1,25 +1,16 @@
 version: 2
-# 依赖更新策略：
-# - minor / patch 归组为一条 PR（降噪）；major 单独开 PR（需人看一眼再合、并重跑评测）。
-# - 每周一检查一次。
-# - 注意：Dependabot 只能改 requirements.txt 里的**宽松约束**与 workflow 里的 actions，
-#   **不能**更新 pip-compile 编译出的 requirements*.lock.txt（那是生成物）。
-#   锁文件仍按 README §四 的流程手工重编：改完 requirements.txt → pip-compile → commit → CI lock-verify。
+# 依赖更新策略（**只开 github-actions**）
+#
+# 为什么不开 pip 生态：本仓库用 pip-compile 编译锁文件（requirements*.lock.txt）。实测（2026-09-20）
+# Dependabot 会按锁文件提出**违反 requirements.txt 声明约束**的升级 PR，例如：
+#   · starlette 1.6.0   —— 本仓库硬约束 <1.0：1.x 会让 FastAPI 的 include_router 失效、业务路由全丢（README §九）
+#   · numpy 2.5.3       —— 约束 <2：会打掉 faiss（README §九）
+#   · duckduckgo-search 8.1.1 —— 约束 <8
+# 这类 PR 一旦被「顺手合并」就是线上事故。因此 pip 侧维持人工流程：
+#   改 requirements.txt → pip-compile 重编锁文件 → commit → CI（lock-verify + pip-audit）→ PR 评审。
+#
+# github-actions 侧则由它自动盯：action 版本过期正是当初触发 Node 运行时弃用告警的原因。
 updates:
-  # Python 依赖（requirements.txt / requirements-dev.txt）
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
-    labels: ["dependencies", "python"]
-    groups:
-      pip-minor-patch:
-        patterns: ["*"]
-        update-types: ["minor", "patch"]
-
-  # CI 自身：workflow 里用到的 actions（版本过期会触发 Node 运行时弃用告警）
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
