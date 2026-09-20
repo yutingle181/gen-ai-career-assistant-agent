@@ -226,11 +226,20 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
   pip install pip-tools
   pip-compile requirements.txt      -o requirements.lock.txt     --no-emit-index-url
   pip-compile requirements-dev.txt  -o requirements-dev.lock.txt --no-emit-index-url
+  python scripts/gen-lock-hashes.py requirements.lock.txt requirements-dev.lock.txt   # 补全各平台哈希
   ```
   `--no-emit-index-url` 必须带，否则会把本地镜像地址写进锁文件，导致 CI 装不上。
+- **哈希校验（`--require-hashes`）**：两份锁文件都带 `--hash=sha256:...`，安装时逐个校验下载产物的 sha256——
+  同名同版本但内容被替换（投毒 / 中间人 / 镜像被污染）会直接安装失败；容器构建即用 `--require-hashes` 安装。
+  - **哈希怎么来的**：`scripts/gen-lock-hashes.py` 查 PyPI 官方元数据（**零下载**）为每个版本补齐**全部已发布文件**的哈希，
+    因此 Windows 本地与 Linux 容器 / CI（manylinux 轮子）都能校验通过。
+  - **为什么不用 `pip-tools --generate-hashes`**：它按**当前平台**解析候选，单平台生成的哈希可能覆盖不到另一平台的轮子
+    （把 Windows 生成的锁拿到 Linux 构建会直接失败）；且要下载全平台文件（数 GB）才能算哈希。
+- **基镜像按 digest 固定**：`Dockerfile` 两处 `FROM python:3.12-slim@sha256:...`——tag 只是会被上游覆盖的别名，
+  digest 才是内容寻址；新 digest 由 Dependabot 的 `docker` 生态每周提 PR（见 `.github/dependabot.yml`）。
 - **CI 保障**：`lock-verify` 任务固定 Python 3.12，用锁定版本安装并跑核心用例；矩阵任务仍用宽松依赖，专门验证跨版本兼容性——两者互补（锁文件按 3.12 编译，部分包如 `faiss-cpu` 在 3.10 未必有 wheel）。
 - **漏洞扫描**：`audit` 任务用 `pip-audit` 扫描锁定依赖，**只告警不阻断**，避免上游 CVE 公告卡住日常开发。
-- **容器构建**：`Dockerfile` 用锁文件安装，镜像内依赖完全可复现。
+- **容器构建**：`Dockerfile` 用 `pip install --require-hashes -r requirements.lock.txt` 安装并逐包校验哈希，基镜像按 digest 固定——依赖可复现且不可被替换。
 
 ### 6 项 Agent 评估标准自检
 

@@ -85,3 +85,11 @@
 - 解决：① 代码写进临时文件（[IO.File]::WriteAllText + UTF8 无 BOM）再按文件路径执行；② 设 env:PYTHONPATH 指向项目根，或把临时脚本放进项目内执行后删除
 - 标签：powershell,python,编码,跨环境验证
 
+### 4. 手写 --hash 行漏掉反斜杠续行，pip 会静默忽略全部哈希
+
+- 日期：2026-09-20
+- 现象：给锁文件补哈希后，pip 在 --require-hashes 下报 3011 条 WARNING: line N has --hash but no requirement, and will be ignored，随后 ERROR: Hashes are required in --require-hashes mode；即每个哈希都被当成没有需求的行丢弃
+- 原因：pip-compile 的哈希格式是反斜杠续行（需求行以「反斜杠」结尾，后续缩进的 --hash 行才算它的续行）。只把哈希写成缩进行、不加行尾反斜杠时，pip 不会把它们挂到上一条需求上
+- 解决：生成脚本改为「需求行 + 行尾反斜杠」，最后一哈希行不加；判据：格式类警告数与「Hashes are required」报错数必须为 0（网络类警告无关）
+- 标签：pip,锁文件,供应链,格式
+
