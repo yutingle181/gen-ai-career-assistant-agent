@@ -8,9 +8,11 @@
 #   不带 pip 缓存与任何构建期残留，镜像更小、攻击面更小。
 # - 非 root 运行：以 uid 10001 的 appuser 启动，容器逃逸也不会直接拿到 root。
 # - 数据与密钥均不进镜像：./data 以 volume 挂载，密钥由 compose 的 env_file 注入。
+# - 供应链固定：基镜像按 digest 钉定（tag 只是别名，会被上游覆盖；Dependabot 的 docker
+#   生态负责跟进新 digest），依赖安装开启 --require-hashes，只接受锁文件里登记的产物。
 
 # ============ 阶段 1：构建依赖 ============
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9 AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -22,11 +24,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
 # 用锁定版本安装：镜像内依赖完全可复现，不受上游发版影响
+# --require-hashes：逐个校验下载产物的 sha256，防止「同名同版本但内容被替换」的投毒/中间人
 COPY requirements.txt requirements.lock.txt ./
-RUN pip install --no-cache-dir -r requirements.lock.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock.txt
 
 # ============ 阶段 2：运行镜像 ============
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
 
 LABEL org.opencontainers.image.title="GenAI Career Assistant" \
       org.opencontainers.image.description="RAG + Agent 职业助手（CPU / 无 torch）"
