@@ -1,0 +1,124 @@
+# 容器镜像：构建 + 验证（把「Docker 多阶段非 root」从纸面变成可复现的 CI 证据）
+#
+# 为什么要单独一个 workflow：
+#   - 镜像构建要拉基础镜像 + 装全套依赖，耗时远高于单测；放进 ci.yml 会拖慢每次 push；
+#   - 因此**只在容器相关文件变化时自动触发**，平时可手动 workflow_dispatch 随时验证。
+#
+# 产出（全部写进该 job 的 Job Summary，流水线页面直接可查）：
+#   构建耗时 / 镜像大小 / 容器内实际身份（uid）/ 容器内 / 的状态码 / openapi 路径数 / docker history 前 8 层
+#
+# 注意：本 workflow 刻意**不适合设为必需状态检查**——它是路径过滤触发的，
+# 若设为必需，不涉及容器文件的 PR 会永远等不到这个检查而卡住合并。
+
+name: Docker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "requirements.txt"
+      - "requirements.lock.txt"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "requirements.txt"
+      - "requirements.lock.txt"
+
+jobs:
+  image:
+    name: Build & verify image
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 构建镜像（记录耗时）
+        run: |
+          start=$(date +%s)
+          docker build -t genai-career-assistant:ci . --progress=plain
+          end=$(date +%s)
+          echo "BUILD_SECONDS=$((end - start))" >> "$GITHUB_ENV"
+          echo "构建耗时 ${BUILD_SECONDS}s"
+
+      - name: 验证 1 · 非 root 运行（期望 uid=10001(appuser)）
+        run: |
+          id_out=$(docker run --rm genai-career-assistant:ci id)
+          echo "id_out=$id_out" >> "$GITHUB_ENV"
+          echo "容器内身份：$id_out"
+          if echo "$id_out" | grep -q "uid=10001(appuser)"; then
+            echo "::notice title=非 root 验证通过::容器内实际身份 $id_out（Dockerfile USER appuser）"
+          else
+            echo "::error title=非 root 验证失败::容器内 uid 不是 10001，实际为 $id_out"
+            exit 1
+          fi
+
+      - name: 验证 2 · 运行镜像复用 builder 的 venv（多阶段生效）
+        run: |
+          docker history genai-career-assistant:ci --no-trunc --format '{{.CreatedBy}}' | head -8 > history.txt
+          cat history.txt
+          if docker run --rm genai-career-assistant:ci sh -c "ls /opt/venv/bin/python"; then
+            echo "::notice title=多阶段验证通过::运行镜像内的 /opt/venv 来自 builder 阶段"
+          else
+            echo "::warning title=多阶段存疑::运行镜像内未找到 /opt/venv，请核对 Dockerfile COPY --from=builder"
+          fi
+
+      - name: 验证 3 · 容器内启动并核对服务与路由
+        run: |
+          # 起不来时不要让 -e 直接掐断，交给下面的状态码判断给出可读错误
+          docker run -d --name probe -p 8000:8000 genai-career-assistant:ci || true
+          code=""
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          echo "root_status=$code" >> "$GITHUB_ENV"
+          paths=$(curl -s http://127.0.0.1:8000/openapi.json | python3 -c "import json,sys; print(len(json.load(sys.stdin)['paths']))" || echo "0")
+          echo "paths=$paths" >> "$GITHUB_ENV"
+          echo "GET / => $code ；openapi 路径数 => $paths（本地实测 16）"
+          docker logs probe 2>&1 | tail -15
+          if [ "$code" = "200" ]; then
+            echo "::notice title=容器内服务可用::GET / 返回 200，openapi 路径数 $paths"
+          else
+            echo "::error title=容器内服务不可用::GET / 返回 $code"
+            exit 1
+          fi
+          if [ "$paths" != "16" ]; then
+            echo "::warning title=路由数与预期不一致::容器内 $paths 条，本地实测 16 条，请核对是否新增/删除了路由"
+          fi
+
+      - name: 汇总到 Job Summary
+        if: always()
+        run: |
+          size=$(docker images genai-career-assistant:ci --format '{{.Size}}' | head -1 || true)
+          {
+            echo "## 容器镜像构建与验证（多阶段 · 非 root）"
+            echo ""
+            echo "| 项目 | 结果 |"
+            echo "|---|---|"
+            echo "| 构建耗时 | ${BUILD_SECONDS:-"(未完成)"} 秒 |"
+            echo "| 镜像大小 | ${size:-"(无镜像)"} |"
+            echo "| 容器内身份 | \`${id_out:-"(未执行)"}\` |"
+            echo "| 容器内 GET / | ${root_status:-"(未执行)"} |"
+            echo "| openapi 路径数 | ${paths:-"(未执行)"}（本地实测 16） |"
+            echo ""
+            echo "<details><summary>docker history（前 8 层）</summary>"
+            echo ""
+            echo '```'
+            cat history.txt 2>/dev/null || echo "(history 未生成)"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 清理
+        if: always()
+        run: |
+          docker rm -f probe 2>/dev/null || true
