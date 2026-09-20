@@ -109,6 +109,8 @@
    ⇒ 实际升级面比立项时估计的更小；`httpx2` / `langchain-classic` / `langchain-protocol` / `langgraph-prebuilt` 属新增传递依赖。
 
 **收尾（2026-09-20 已完成）**：PR 上 6 项检查全绿（`lint` / `test` 3.10 + 3.11 + 3.12 / `lock-verify` / `audit`），
-以 **Rebase and merge** 合入 `master`（`f7c9eb1` + `b131189`，线性、无合并气泡），两个远端 `master` 已同步到同一哈希；
+以 **Rebase and merge** 合入 `master`（`3e9a00d` + `fd6939a`，线性、无合并气泡），两个远端 `master` 已同步到同一哈希
+（注：2026-09-20 为清除仓库内的私人材料做了一次历史改写，早期文档里写的 `f7c9eb1` / `b131189` 等 SHA 已失效，
+对应提交现在是上面这两个 ID —— 这也是「历史改写会变更全部提交 ID」的一个实例）；
 前面提到的 `v1.5.0 → v1.6.0` 版本号同步也已落地（`src/__init__.py`、`README.md` 含 §十 变更记录、
 `docs/ENGINEERING_SUMMARY.md`、`docs/DEV_NOTES.md` 四处；`openapi.info.version` 实测为 `1.6.0`）。
