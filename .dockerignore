@@ -15,4 +15,3 @@ data/
 *.log
 .playwright-cli/
 .ipynb_checkpoints/
-agent_hackathon_genAI_career_assistant.ipynb
