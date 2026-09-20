@@ -7,7 +7,7 @@
 ## 一、项目速览
 
 - 项目名称：Agent实习项目
-- 版本号：1.5.0
+- 版本号：1.6.0
 - 技术栈：Python · FastAPI · Streamlit · LangGraph/LangChain（RAG：faiss + BM25）
 - 仓库根目录：D:\project\Agent实习项目
 

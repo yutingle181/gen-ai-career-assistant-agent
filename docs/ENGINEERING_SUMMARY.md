@@ -1,8 +1,8 @@
-# 工程总结 · GenAI Career Assistant（v1.5.0）
+# 工程总结 · GenAI Career Assistant（v1.6.0）
 
 > 用途：面试前 5 分钟速览 / 交付说明 / 复盘底稿。
 > 口径：所有数字都来自仓库现状（`pytest` 实测、源码计数、CI 配置），标注"README 口径"的为文档原值。
-> 最后核对：2026-09-20（v1.5.0）。
+> 最后核对：2026-09-20（v1.6.0）。
 
 ---
 
@@ -65,7 +65,7 @@ FastAPI 服务，内置评测体系（Recall@5 / MRR / HitRate / 幻觉率 + 双
 | CI：`lint` | `ruff check .`，规则集固定在 `pyproject.toml`（E/W/F/I/UP/B），行宽 120、目标 3.10+ |
 | CI：`test` | Python **3.10 / 3.11 / 3.12** 矩阵，`--cov-fail-under=75` |
 | CI：`lock-verify` | 按锁文件安装并跑核心用例（锁文件按 3.12 编译，与矩阵互补） |
-| CI：`audit` | `pip-audit` 扫描锁定依赖，只告警不阻断 |
+| CI：`audit` | `pip-audit` 扫描锁定依赖：**只告警不阻断，但绝不静默**（命中打 `::warning` 注释 + 明细写进 Job Summary；任务级 `continue-on-error` 仅作兜底）。当前命中 12 条 / 2 包，理由见 README §九 |
 | 本地提交前 | `preflight.ps1` 门禁：隐私文件 / 大文件 / 版本号一致性 / 文档引用 / 全量测试 |
 | 测试设计 | **全部离线可跑**：伪 Embedding、无 Key 走降级、伪工具 + 伪模型、MCP 用真实协议的最小假服务端 |
 
@@ -92,6 +92,7 @@ FastAPI 服务，内置评测体系（Recall@5 / MRR / HitRate / 幻觉率 + 双
 | v1.3.0 | 失败路径 · 时效 · 生命周期 | 故障注入 + 注入实测；统一检索契约 `retrieve_with_grade`；新鲜度标注 + 入库记时间；任务取消 / 排队 |
 | v1.4.0 | MCP 接入 | stdio JSON-RPC 客户端 + 工具包装；官方 filesystem server 实测 14 工具 |
 | v1.5.0 | Skills 骨架 | 声明式注册表 + 版本 / 接口兼容校验 + 最小权限（装配期过滤，显式检索同校验） |
+| v1.6.0 | 依赖升级与供应链收敛 | LangChain 0.3→1.4 / LangGraph 0.2→1.2（`starlette<1.0` 未动，代码零改动）；锁文件重编 101 / 107 包；CI `audit` 改「只告警不阻断但不静默」；漏洞 **32 条 → 12 条** |
 
 ## 8. 真实缺陷清单（全部有修复与回归记录）
 

@@ -1,6 +1,6 @@
 # GenAI Career Assistant · RAG + Agent 职业引擎
 
-> 当前版本 **v1.5.0** · 变更记录见 [§十](#十版本与变更记录)
+> 当前版本 **v1.6.0** · 变更记录见 [§十](#十版本与变更记录)
 
 ![GenAI 职业助手创意海报](docs/poster.png)
 
@@ -347,7 +347,24 @@ tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 
 版本号唯一来源：`src/__init__.py::__version__`（FastAPI 的 `openapi.info.version` 直接引用它，避免两处漂移）。
 
-### v1.5.0（当前）Skills 骨架（注册 / 版本 / 权限）
+### v1.6.0（当前）依赖升级与供应链收敛（LangChain / LangGraph 跨大版本）
+
+**升级（代码零改动）**
+
+- `langchain 0.3.30 → 1.4.2`、`langchain-core 0.3.86 → 1.6.3`、`langchain-openai 0.3.35 → 1.6.2`、`langchain-text-splitters 0.3.11 → 1.1.2`、`langchain-community 0.3.31 → 0.4.2`、`langgraph 0.2.76 → 1.2.11`；两份锁文件按项目约定重编（**101 / 107 包**）。`starlette` 保持 `<1.0`（硬约束未被动摇），`openai` 未被带走（仍 2.54.0）。
+- **效果**：`pip-audit -r requirements.lock.txt` 命中 **32 条 / 9 包 → 12 条 / 2 包**（剩 `starlette` 10 + `diskcache` 2，两类理由见 §九）。
+
+**方式（先取证再动手）**
+
+- 立项时先用一次性环境做三件实测：目标栈与 `starlette<1.0` **共存解析**（`pip install --dry-run` 退出码 0、starlette 原样不动）、**接口存活矩阵**（我们实际 import 的 12 模块 / 19 个符号全数存活）、`pip-audit` 命中数；据此把「整条栈要重写」收缩为「行为复测」，才敢给分阶段方案。
+- **验收判据先写死再动手**：全量 `pytest` 全绿、离线检索 4 组指标与升级前一致、双路径 A/B 结构一致、**故障注入复跑**仍「对照组失败率 100% + Failure Onset 1.0」、`openapi.json` 16 条业务路由齐全、CI 三版本矩阵与 `lock-verify` 全绿。过程与全部数字见 `docs/DEP_UPGRADE_PLAN.md`。
+
+**配套**
+
+- CI `audit` 改为「**只告警不阻断，但绝不静默**」：命中时打 `::warning` 注释并把完整明细写进该步骤的 Job Summary（任务级 `continue-on-error` 仅作兜底）。升级后这个口径**不开倒车**——剩余 12 条有书面理由，不许用静默把它变成 0。
+- 新增 `docs/DEV_NOTES.md`（项目速览 / 常用命令 / 端口 / 目录与「偏离默认」约定 + 踩坑记录），提交前门禁的 DEV_NOTES 警告随之消除。
+
+### v1.5.0 Skills 骨架（注册 / 版本 / 权限）
 
 **新增能力（默认授权面与改动前完全一致，零回归）**
 

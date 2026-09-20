@@ -108,5 +108,7 @@
 2. **`openai` 没被带走**：`pip-compile` 在目标约束下仍解出 `openai==2.54.0`（探针环境里升到 3.16.2 也跑绿）
    ⇒ 实际升级面比立项时估计的更小；`httpx2` / `langchain-classic` / `langchain-protocol` / `langgraph-prebuilt` 属新增传递依赖。
 
-**未做（留给合并时决定）**：版本号 `v1.5.0 → v1.6.0` 需同步 `src/__init__.py`、`README.md`（含 §十 变更记录）、
-`docs/ENGINEERING_SUMMARY.md`、`docs/DEV_NOTES.md` 四处，属发布动作，不在待验证分支上先占版号。
+**收尾（2026-09-20 已完成）**：PR 上 6 项检查全绿（`lint` / `test` 3.10 + 3.11 + 3.12 / `lock-verify` / `audit`），
+以 **Rebase and merge** 合入 `master`（`f7c9eb1` + `b131189`，线性、无合并气泡），两个远端 `master` 已同步到同一哈希；
+前面提到的 `v1.5.0 → v1.6.0` 版本号同步也已落地（`src/__init__.py`、`README.md` 含 §十 变更记录、
+`docs/ENGINEERING_SUMMARY.md`、`docs/DEV_NOTES.md` 四处；`openapi.info.version` 实测为 `1.6.0`）。
