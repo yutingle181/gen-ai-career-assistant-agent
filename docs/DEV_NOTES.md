@@ -52,6 +52,7 @@
 - **`starlette` 必须 `<1.0`**：1.x 会让 FastAPI 的 `include_router` 失效、业务路由全丢（`openapi.json` 会变成空路径）。升级依赖时先看 `openapi.json` 里的路径数。
 - **D 盘有「安全删除」策略**：批量删除会被拦截（提示 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`），需人工确认；临时目录/一次性虚拟环境建议建在 C 盘或当前工作区内，避免留垃圾删不掉。
 - **CI 的 `audit` 任务只告警不阻断**：步骤内自己吞掉 `pip-audit` 的非零退出，命中时打 `::warning` 并把明细写进 Job Summary（`continue-on-error` 只是兜底）。**它报红不代表业务失败**，处置口径见 README §九。
+- **`master` 已开分支保护（禁强推 / 禁删除）**：2026-09-20 起生效——改代码一律走「分支 → PR → 等 CI 绿 → 合并」，别直接往 master 提交。**代价是 master 不能再 `git push --force`**：若将来需要再次改写历史（如清除误提交的隐私文件），**必须先到 `Settings → Rules`（旧界面在 `Branches`）临时关闭该规则**，改完再开回。自查是否生效：仓库首页若还出现「Your master branch isn't protected」提示，就是没开。
 
 ## 六、踩坑记录
 
