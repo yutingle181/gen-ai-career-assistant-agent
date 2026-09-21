@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from .. import config
@@ -29,9 +30,39 @@ _SAVER: Any = None
 _BACKEND: str = ""
 _READY = False
 
+#: 必须在本进程存活的引用（连接 / 上下文管理器）。
+#: 为什么要刻意保留：`SqliteSaver.from_conn_string()` 返回的是上下文管理器，
+#: 一旦它被垃圾回收，`__exit__` 会关闭连接——saver 随后对任何读写都报
+#: 「Cannot operate on a closed database」（2026-09-21 实测踩到）。
+_KEEPALIVE: list[Any] = []
+
+
+def _probe_saver(saver: Any, backend: str) -> bool:
+    """可用性自检：**import 成功不等于版本兼容**。
+
+    真实踩坑（2026-09-21）：`langgraph 0.2.76` 与 `langgraph-checkpoint 4.2.0` 混装时，
+    `from langgraph.checkpoint.sqlite import SqliteSaver` 完全正常，但真正读写 checkpoint
+    才会炸——若只看 import 结果，就会把「运行期才失败」的 saver 挂到图上，
+    比干脆不挂更危险（用户看到的是「恢复能力时好时坏」）。
+
+    所以这里多做两步最小验证：能 setup 就 setup（SQLite 建表），再按 langgraph 的
+    读接口探一次（空库返回 None，属于正常）。任一步抛异常即判定该后端不可用，继续降级。
+    """
+    try:
+        setup = getattr(saver, "setup", None)
+        if callable(setup):
+            setup()
+        get_tuple = getattr(saver, "get_tuple", None)
+        if callable(get_tuple):
+            get_tuple({"configurable": {"thread_id": "__checkpoint_probe__"}})
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("%s checkpointer 自检未通过，视为不可用并降级：%s", backend, exc)
+        return False
+
 
 def _build_saver() -> tuple[Any, str]:
-    """按「sqlite → memory → 无」的顺序尝试构建 saver。"""
+    """按「sqlite → memory → 无」的顺序尝试构建 saver，每个候选都要过可用性自检。"""
     if not config.ENABLE_CHECKPOINT:
         return None, "disabled"
 
@@ -39,20 +70,33 @@ def _build_saver() -> tuple[Any, str]:
         try:
             from langgraph.checkpoint.sqlite import SqliteSaver
 
-            saver = SqliteSaver.from_conn_string(config.CHECKPOINT_DB_PATH)
-            # from_conn_string 在不同版本返回上下文管理器或 saver 本身，两种都兼容
-            saver = getattr(saver, "__enter__", lambda: saver)()
-            return saver, "sqlite"
+            # 优先自己建连接：显式、无 GC 隐患，并用 check_same_thread=False 适配
+            # 多线程 ASGI 宿主（API 的流式输出在工作线程里跑）。
+            try:
+                conn = sqlite3.connect(config.CHECKPOINT_DB_PATH, check_same_thread=False)
+                saver = SqliteSaver(conn)
+                _KEEPALIVE.append(conn)
+            except TypeError:
+                # 兼容只提供 from_conn_string 的版本：必须把上下文管理器留在 _KEEPALIVE，
+                # 否则它被回收时会关掉连接。
+                cm = SqliteSaver.from_conn_string(config.CHECKPOINT_DB_PATH)
+                saver = cm.__enter__()
+                _KEEPALIVE.append(cm)
+            if _probe_saver(saver, "sqlite"):
+                _KEEPALIVE.append(saver)
+                return saver, "sqlite"
         except Exception as exc:  # noqa: BLE001
             logger.info("SqliteSaver 不可用，降级为内存 checkpointer：%s", exc)
 
     try:
         from langgraph.checkpoint.memory import InMemorySaver
 
-        return InMemorySaver(), "memory"
+        saver = InMemorySaver()
+        if _probe_saver(saver, "memory"):
+            return saver, "memory"
     except Exception as exc:  # noqa: BLE001
         logger.info("内存 checkpointer 不可用，本轮不启用 checkpoint：%s", exc)
-        return None, "none"
+    return None, "none"
 
 
 def get_checkpointer() -> tuple[Any, str]:
@@ -72,9 +116,10 @@ def get_checkpointer() -> tuple[Any, str]:
 
 
 def reset_checkpointer() -> None:
-    """清空缓存（配置热更新与测试用）。"""
+    """清空缓存（配置热更新与测试用），并释放保活引用（连接会随之关闭）。"""
     global _SAVER, _BACKEND, _READY
     _SAVER, _BACKEND, _READY = None, "", False
+    _KEEPALIVE.clear()
 
 
 def backend_name() -> str:

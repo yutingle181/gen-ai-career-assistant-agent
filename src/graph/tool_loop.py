@@ -123,18 +123,31 @@ def _invoke_tool_graph(app, initial: dict, graph_config: dict, resumable: bool) 
     而不是重传消息。三种情形：
 
     - 该 thread 尚无 checkpoint → 正常启动；
-    - 有 checkpoint 且还有待执行节点 → 传 None 续跑未完成的那一轮；
-    - 有 checkpoint 且该轮已跑完 → 直接复用结果，**不重复执行模型与工具**
+    - 有 checkpoint 但这一轮还没收束 → 传 None 继续跑完（**未完成的工具节点会重跑一次**，
+      即 at-least-once；需要强幂等的工具应自己做幂等）；
+    - 有 checkpoint 且已有可交付的助手回复 → 直接复用结果，**不重复执行模型与工具**
       （这正是「重试不产生重复副作用」的落点）。
+
+    为什么收束判据不是「`snapshot.next` 是否为空」：
+    进程在节点提交前崩掉时，`pending_writes` 会被 `get_state()` 合并进 state、`next` 变成空元组，
+    但 state 里其实只有用户消息——按 next 判断会误判成「这一轮已完成」，于是直接复用、
+    返回空答案（2026-09-21 实测：崩溃续跑输出 `''`）。所以判据取「**state 里存在非空 AIMessage**」。
     """
     if not resumable:
         return app.invoke(initial, config=graph_config)
 
     thread_id = (graph_config.get("configurable") or {}).get("thread_id", "")
     snapshot = app.get_state(graph_config)
-    if snapshot and snapshot.values.get("messages"):
-        if snapshot.next:
-            logger.info("检测到未完成的 checkpoint，续跑本轮工具闭环 | thread=%s", thread_id)
+    messages = list((snapshot.values or {}).get("messages") or []) if snapshot else []
+    if messages:
+        finished = bool(_final_text(messages))
+        if snapshot.next or not finished:
+            logger.info(
+                "checkpoint 尚未收束（待执行节点=%s，已有最终答案=%s），纯续跑本轮工具闭环 | thread=%s",
+                bool(snapshot.next),
+                finished,
+                thread_id,
+            )
             return app.invoke(None, config=graph_config)
         logger.info("本轮已有完整 checkpoint，直接复用结果（不重复执行工具）| thread=%s", thread_id)
         return dict(snapshot.values)

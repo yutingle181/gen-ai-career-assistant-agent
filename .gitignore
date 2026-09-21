@@ -19,6 +19,7 @@ ENV/
 # Data / artifacts (local)
 *.db
 *.sqlite3
+*.sqlite
 *.pkl
 *.log
 *.pid
