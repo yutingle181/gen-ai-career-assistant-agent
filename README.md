@@ -188,8 +188,8 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 
 ### 测试与覆盖率
 - **一键运行**：`pip install -r requirements-dev.txt` 后直接 `pytest`（`pyproject.toml` 中已配好 `testpaths` 与 `pythonpath`，不依赖调用方式）。
-- **用例规模**：**461 条**（pytest 实际收集数，含参数化展开；源码级 430 个用例函数），分散在 **40 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
-- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **91%**（4836 语句 / 漏 426；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
+- **用例规模**：**465 条**（pytest 实际收集数，含参数化展开；源码级 435 个用例函数），分散在 **40 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
+- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **91%**（4836 语句 / 漏 420；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
 - **测试文件清单**（40 个 `test_*.py`，按关注点分组）：
   - 路由 / 节点：`test_graph_route.py`（9 模式路由与端到端冒烟）、`test_nodes.py`（节点与分支，`nodes.py` 覆盖率 98%）、`test_model_routing.py`（强弱模型分级路由）
   - RAG 链路：`test_rag.py` / `test_loaders.py` / `test_rerank.py` / `test_retrieval_cache.py` / `test_embeddings.py` / `test_prompt_cache.py`
@@ -335,7 +335,7 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
   - **JD 匹配评分卡**：关联「AI 应用工程师」岗位 + 简历后提问，返回 **73/100**，分项 技能 80 / 经验 70 / 学历 0 / 项目 80，命中项 3 条、缺口项 3 条、面试准备重点 3 条，前端渲染为环形总分 + 分项进度条 + 命中/缺口双栏。
   - **面试复盘分区卡片**：提交一段模拟面试记录后返回 **65/100**（技术深度 60 / 问题结构 70 / 证据支撑 60），归档后在「面试复盘」页渲染为 四段式卡片：表现评分（4 枚环形指标）、追问链还原（Q1–Q4 步骤条）、薄弱点（警示色左边框）、改进动作（可勾选清单）。
   - **工具调用时间线**：`job_search` 模式下模型自主调用 `search_web`，前端渲染折叠摘要「调用了 1 个工具 · 10.1s」，展开显示工具名（等宽）/ 序号与耗时 / 入参摘要 / 返回摘要；本次联网实际超时降级，时间线如实显示「联网检索无结果或暂不可用，请基于已有信息作答」。
-- 测试套件：**461 条用例、覆盖率 91%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
+- 测试套件：**465 条用例、覆盖率 91%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
 
 ### 已知问题 / 注意
 - **必须配置有效 Key**：对话与知识库建库分别依赖 `OPENAI_API_KEY` 与 `EMBEDDING_API_KEY`（Embedding 默认走硅基流动 `BAAI/bge-m3`）。未配置或无效时仅能演示路由/建库/检索流程，真实生成会降级。
@@ -429,7 +429,7 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 - **终止兜底两层**：新增图级 `TOOL_RECURSION_LIMIT`，并捕获 `GraphRecursionError` → 走一次「图外强制收束」，保证用户拿到阶段性结论而不是异常栈。
 - **工具失败分级**：同通道退避重试 → 换参数（简化检索式）→ 换通道（DuckDuckGo backend）→ 如实降级；降级文本带统一标记 `【工具降级:kind】`，事件流改为 `ok=false` + `error_kind`，Prompt 硬性要求把「未联网核实」写进答案。
 - **数据时效**：工具结果注入**抓取时间**，知识库片段带**文档时间**（查不到就显式写「未知」）；人设新增资料时效规则，禁止把过期资料当作最新事实陈述。
-- **可恢复性**：会话级 `deps.restore_session`（重启后带同一 `session_id` 继续，历史 / 转写 / 产物路径从 SQLite 重建）；单轮级 LangGraph checkpoint（`thread_id = 会话:轮次`，同一轮重试命中已有 checkpoint 时**不重复执行模型与工具**）；产物按幂等键命名，重放只覆盖同一文件。
+- **可恢复性**：会话级 `deps.restore_session`（重启后带同一 `session_id` 继续，历史 / 转写 / 产物路径从 SQLite 重建）；单轮级 LangGraph checkpoint（`thread_id = 会话:轮次`）按 **sqlite → memory → 不启用** 三级降级（`langgraph-checkpoint-sqlite` 为可选依赖，未装则只有进程内有效；当前后端在 `/health` 的 `runtime.checkpoint` 直接可见）。命中**已完成**的 checkpoint 时**不重复执行模型与工具**；若进程崩在节点提交前，则按 **at-least-once** 续跑（未完成的工具节点会重跑一次，续跑能收束出答案，**需要强幂等的工具要自己做幂等**）——跨进程行为已有真子进程 + 真硬崩的实测用例（`tests/test_checkpoint_cross_process.py`）；产物按幂等键命名，重放只覆盖同一文件。
 - **轨迹级评测**：`eval/trajectory.py` 提供 **TaskSuccessRate**（按场景结构标记 + 工具事件判定，不额外调用模型，可复现）与 **Failure Onset**（最早失败发生在第几步）+ 失败原因分布，并自动进入评测报告新章节。
 - **槽位记忆（默认关闭）**：城市 / 岗位方向 / 时间范围 / 学历单独记录并每轮裁剪后重注入，避免「只要广东」这类硬约束被 `trim_messages` 裁掉。
 - **熔断与指标**：`CircuitBreaker`（连续失败阈值 → 冷却 → 半开）；`src/metrics.py` 提供工具失败率 / 熔断拦截率 / 超轮次率 / 递归终止率；`/health` 一处可见运行时开关、checkpoint 后端与指标快照。

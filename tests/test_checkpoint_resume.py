@@ -1,10 +1,13 @@
 """可恢复性（P1-4）：checkpoint 降级、同轮复用、幂等产物、会话重建。
 
-四层覆盖：
-1. checkpointer 工厂的三级降级（sqlite → memory → 不启用），且**任何一种都不能抛异常**；
+五层覆盖：
+1. checkpointer 工厂的三级降级（sqlite → memory → 不启用），且**任何一种都不能抛异常**
+   （含 DB 路径不可写、以及「import 正常但运行期才炸」的 saver 被可用性自检拦下）；
 2. 同一 thread 重跑：已有完整 checkpoint 时直接复用结果，**不重复调用模型与工具**；
 3. `save_file(key=...)` 幂等：同一会话反复收尾只覆盖同一个文件，不堆副本；
-4. 会话级恢复：`SessionManager.restore` 与 `deps.restore_session` 能把历史接回来。
+4. 会话级恢复：`SessionManager.restore` 与 `deps.restore_session` 能把历史接回来；
+5. sqlite 后端自身的可用性：**工作线程里读写**（`check_same_thread=False`）与 **GC 后连接仍存活**
+   （保活引用）——这两条对应 API 流式（工作线程）与「静默降级成内存」两个真实故障面。
 
 全部离线：不联网、不依赖 API Key、不碰真实 app.db（读库函数打桩）。
 """
@@ -58,6 +61,118 @@ def test_checkpointer_degrades_without_sqlite(monkeypatch):
     assert backend in ("memory", "none")
     assert (saver is None) == (backend == "none")
     assert checkpoint.backend_name() == backend  # 结果被缓存，供 /health 展示
+
+
+def test_checkpointer_degrades_when_db_path_unwritable(monkeypatch, tmp_path):
+    """DB 路径不可写时只能降级，不能影响服务启动。
+
+    目录不存在 → `sqlite3.connect` 抛 `unable to open database file`，这是启动期常态
+    （挂载盘未就绪、权限不足、路径写错都会这样）。工厂必须吞掉它并降级到内存，
+    否则一个「可选的可恢复性能力」会把整个服务拖起不来。
+    """
+    monkeypatch.setattr(config, "ENABLE_CHECKPOINT", True)
+    monkeypatch.setattr(config, "CHECKPOINT_DB_PATH", str(tmp_path / "not-exist-dir" / "ckpt.sqlite"))
+    checkpoint.reset_checkpointer()
+
+    saver, backend = checkpoint.get_checkpointer()  # 不允许抛异常
+
+    assert backend in ("memory", "none")
+    assert (saver is None) == (backend == "none")
+    assert not (tmp_path / "not-exist-dir").exists()  # 也不该偷偷替用户建目录
+
+
+def test_probe_saver_rejects_runtime_broken_saver():
+    """`_probe_saver` 必须拦下「import 正常、运行期才炸」的 saver。
+
+    回归背景（2026-09-21 实测）：`langgraph 0.2.76` 与 `langgraph-checkpoint 4.2.0` 混装时，
+    import 完全正常，但真正读写才抛异常。只看 import 结果就会把这种 saver 挂到图上，
+    表现为「恢复能力时好时坏」——比干脆不挂更难排查，所以自检要覆盖 setup 与读两条路径。
+    """
+
+    class _BrokenOnSetup:
+        def setup(self):
+            raise RuntimeError("Cannot operate on a closed database")
+
+    class _BrokenOnRead:
+        def setup(self):
+            self.ready = True
+
+        def get_tuple(self, config):
+            raise RuntimeError("sqlite3.ProgrammingError: closed database")
+
+    class _Healthy:
+        def setup(self):
+            self.ready = True
+
+        def get_tuple(self, config):
+            return None
+
+    assert checkpoint._probe_saver(_BrokenOnSetup(), "sqlite") is False
+    assert checkpoint._probe_saver(_BrokenOnRead(), "sqlite") is False
+    assert checkpoint._probe_saver(_Healthy(), "memory") is True
+
+
+def _sqlite_saver_or_skip(monkeypatch, tmp_path):
+    """拿到真实 sqlite saver；环境未装可选依赖时跳过（这类用例不该假装通过）。"""
+    monkeypatch.setattr(config, "ENABLE_CHECKPOINT", True)
+    monkeypatch.setattr(config, "CHECKPOINT_DB_PATH", str(tmp_path / "ckpt.sqlite"))
+    checkpoint.reset_checkpointer()
+    saver, backend = checkpoint.get_checkpointer()
+    if backend != "sqlite":
+        pytest.skip(f"当前环境未启用 sqlite checkpointer（backend={backend}）")
+    return saver
+
+
+def test_sqlite_saver_is_usable_from_worker_thread(monkeypatch, tmp_path):
+    """sqlite saver 必须能在**工作线程**里读写。
+
+    为什么这条是必需的：API 的 SSE 流式输出跑在 ASGI 的工作线程里，而 saver 是进程级单例、
+    连接在启动时创建。若用默认连接参数（限制同线程使用），真实请求会报
+    「SQLite objects created in a thread can only be used in that same thread」——
+    单测（主线程）全绿、线上必炸。所以建连接时用了 `check_same_thread=False`，这条把它钉住。
+    """
+    import threading
+
+    _sqlite_saver_or_skip(monkeypatch, tmp_path)
+    model = _ScriptedModel()
+    monkeypatch.setattr(tool_loop, "get_chat_model", lambda **kwargs: model)
+
+    result: dict = {}
+
+    def _run():
+        try:
+            result["out"] = tool_loop.run_with_tools(
+                [HumanMessage(content="查")], tools=[search_web], thread_id="s1:t0"
+            )
+        except Exception as exc:  # noqa: BLE001
+            result["err"] = exc
+
+    thread = threading.Thread(target=_run, name="checkpoint-worker")
+    thread.start()
+    thread.join(timeout=60)
+    assert not thread.is_alive(), "工作线程超时未返回（checkpoint 疑似卡住）"
+
+    assert "err" not in result, f"工作线程里读写 checkpoint 失败：{result.get('err')}"
+    assert result.get("out") == "最终答案"
+    assert (tmp_path / "ckpt.sqlite").stat().st_size > 0  # 确实落盘了，不是内存兜底
+
+
+def test_sqlite_saver_survives_garbage_collection(monkeypatch, tmp_path):
+    """保活引用必须让连接熬过 GC。
+
+    回归背景（2026-09-21 实测）：`SqliteSaver.from_conn_string()` 返回的是上下文管理器，
+    一旦被垃圾回收就触发 `__exit__` 关掉连接，之后任何读写都报
+    「Cannot operate on a closed database」。这里显式 `gc.collect()` 后再读一次——
+    没有保活引用时这条必挂（表现是 sqlite 静默降级成内存）。
+    """
+    import gc
+
+    saver = _sqlite_saver_or_skip(monkeypatch, tmp_path)
+    gc.collect()
+
+    assert checkpoint._KEEPALIVE, "必须持有保活引用（连接 / 上下文管理器）"
+    # 空线程返回 None 属正常；关键是「没抛异常」——连接还活着
+    assert saver.get_tuple({"configurable": {"thread_id": "ghost-thread"}}) is None
 
 
 # ------------------------------------------------------------------ 2. 同轮复用

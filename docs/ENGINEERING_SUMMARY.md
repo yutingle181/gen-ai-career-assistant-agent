@@ -17,8 +17,8 @@ FastAPI 服务，内置评测体系（Recall@5 / MRR / HitRate / 幻觉率 + 双
 | 维度 | 现值 |
 | --- | --- |
 | 服务代码 | `src/` **70 个 Python 文件**（最大三块：`tools.py` 27KB、`session.py` 22KB、`api/routers/chat.py` 19.6KB） |
-| 测试 | `tests/` **40 个 `test_*.py`** + `smoke_test.py`；**pytest 实际收集 461 条用例**（源码级 430 个用例函数） |
-| 覆盖率 | `pytest --cov=src` **91%**（4836 语句 / 漏 426）；`tasks.py` / `safety.py` / `state.py` / `eval/runner.py` 达 100% |
+| 测试 | `tests/` **40 个 `test_*.py`** + `smoke_test.py`；**pytest 实际收集 465 条用例**（源码级 435 个用例函数） |
+| 覆盖率 | `pytest --cov=src` **91%**（4836 语句 / 漏 420）；`tasks.py` / `safety.py` / `state.py` / `eval/runner.py` 达 100% |
 | 入口 | `app.py`（Streamlit）、`run_eval.py`（评测 CLI）、`run_api.ps1` / `run_web.ps1`、Dockerfile + compose |
 | 依赖治理 | `requirements.lock.txt`（**101 包**）/ `requirements-dev.lock.txt`（**107 包**），钉全部传递依赖；2026-09-20 LangChain/LangGraph 跨大版本升级后重编（过程与证据见 `docs/DEP_UPGRADE_PLAN.md`） |
 | 业务面 | 9 个场景 · 5 组 API · 3 类消费方（Streamlit / jobseeker 前端 / API 调用方） |
