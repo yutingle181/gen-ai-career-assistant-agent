@@ -111,4 +111,20 @@
 - 解决：收束判据改为「state 中是否存在**非空 AIMessage**」（复用 `_final_text`）；未收束则 `app.invoke(None)` 纯续跑，未完成的工具节点会重跑一次（at-least-once）
 - 判据：`tests/test_checkpoint_cross_process.py::test_resume_after_hard_crash_finishes_the_turn`（续跑输出非空 + 工具计数为 2）
 - 标签：langgraph,checkpoint,pending_writes,续跑,at-least-once
+### 7. Windows 上编译的锁文件会漏掉平台专属依赖，Linux 安装时在哈希模式报错
+
+- 日期：2026-09-21
+- 现象：CI（Ubuntu）安装 `requirements-dev.lock.txt` 报
+  `ERROR: In --require-hashes mode, all requirements must have their versions pinned with ==. These do not: uvloop>=0.15.1 (from uvicorn[standard]==0.52.4 -> -r requirements-dev.lock.txt (line 2788))`；
+  而 Windows 本地装同一份锁完全正常，锁里也「未钉版行 = 0」
+- 原因：uvloop 不支持 Windows，`pip-compile` 在 Windows 上解析 `uvicorn[standard]` 时把这条依赖**整条略过**——
+  锁里既没有 uvloop 的钉版行、也没有它的哈希。Linux 上 uvicorn 的 extra 依然要求 uvloop，
+  而文件里一旦出现 `--hash`，pip 就**自动进入哈希模式**（不许临场补装）→ 直接失败。
+  括号里的 `line 2788` 是父依赖 uvicorn 的行号，不是 uvloop 的位置，别被它带偏。
+- 解决：按 Linux 编译会得到的样子补一条 `uvloop==<ver> ; sys_platform != "win32"`（带 PyPI 全平台文件哈希，含 linux 轮子）；
+  **两份锁都要补**（主锁供镜像构建，开发锁供 CI 安装）。删掉该行也能让 CI 变绿，但那等于 Linux 运行时悄悄少一个加速件，属静默偏差。
+- 判据：在 Linux 上 `pip install --require-hashes -r requirements-dev.lock.txt` 成功（CI 的 lock-verify 已覆盖）。
+  **注意这类问题在 Windows 上无法复现**——「平台专属依赖是否齐全」没有便宜的静态判据，只能真在 Linux 装一次，
+  这正是 lock-verify 与镜像构建的价值所在。
+- 标签：pip,锁文件,跨平台,哈希模式,uvloop,供应链
 
