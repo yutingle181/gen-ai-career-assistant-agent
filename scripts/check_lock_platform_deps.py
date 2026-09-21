@@ -29,7 +29,6 @@ import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from packaging.markers import Marker
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
@@ -54,7 +53,7 @@ _FETCH_TRIES = 3
 def fetch_requires(pkg: str, ver: str) -> list[str]:
     """取某个版本的 ``requires_dist``（带重试：PyPI 偶发连接中断不该让检查误报）。"""
     last: Exception | None = None
-    for attempt in range(_FETCH_TRIES):
+    for _attempt in range(_FETCH_TRIES):
         try:
             request = urllib.request.Request(
                 f"https://pypi.org/pypi/{pkg}/{ver}/json",
