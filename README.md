@@ -188,14 +188,14 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 
 ### 测试与覆盖率
 - **一键运行**：`pip install -r requirements-dev.txt` 后直接 `pytest`（`pyproject.toml` 中已配好 `testpaths` 与 `pythonpath`，不依赖调用方式）。
-- **用例规模**：**458 条**（pytest 实际收集数，含参数化展开；源码级 427 个用例函数），分散在 **39 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
-- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **91%**（4809 语句 / 漏 424；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
-- **测试文件清单**（39 个 `test_*.py`，按关注点分组）：
+- **用例规模**：**461 条**（pytest 实际收集数，含参数化展开；源码级 430 个用例函数），分散在 **40 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
+- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **91%**（4836 语句 / 漏 426；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
+- **测试文件清单**（40 个 `test_*.py`，按关注点分组）：
   - 路由 / 节点：`test_graph_route.py`（9 模式路由与端到端冒烟）、`test_nodes.py`（节点与分支，`nodes.py` 覆盖率 98%）、`test_model_routing.py`（强弱模型分级路由）
   - RAG 链路：`test_rag.py` / `test_loaders.py` / `test_rerank.py` / `test_retrieval_cache.py` / `test_embeddings.py` / `test_prompt_cache.py`
   - 工具与**失败路径**：`test_tools.py` / `test_tool_retry.py`（超时 + 失败分级 + 重试）/ `test_circuit_breaker.py`（熔断）/ **`test_fault_injection.py`**（故障注入：注入序列可复现、重试阶梯、熔断短路、统一检索契约、对照路径不再崩、CLI 契约）
   - 工具调用与评测：`test_tool_calling.py`（伪工具 + 伪模型：正常调用 / 达轮次上限收束 / 工具异常回灌 / 开关关闭走旧路径）、`test_tool_eval.py`（双路径 A/B 汇总口径与失败容错）、`test_run_eval_cli.py`（CLI 参数契约与 A/B 降级）、`test_traj_metrics.py`（轨迹级指标）、`test_eval.py`（指标与评测集生成）
-  - 会话与产物：`test_session.py` / `test_storage.py`（含越权防护）/ `test_stream_persistence.py`（流式入栈与落库）/ `test_checkpoint_resume.py`（单轮可恢复与幂等）/ `test_hitl.py`（草稿→定稿）/ `test_slot_memory.py`
+  - 会话与产物：`test_session.py` / `test_storage.py`（含越权防护）/ `test_stream_persistence.py`（流式入栈与落库）/ `test_checkpoint_resume.py`（单轮可恢复与幂等）、**`test_checkpoint_cross_process.py`**（跨进程恢复：真起子进程 + 真硬崩——重启后同 thread 重发不重复执行工具、硬崩后按 at-least-once 续跑出答案）/ `test_hitl.py`（草稿→定稿）/ `test_slot_memory.py`
   - 接口与安全：`test_api.py`（鉴权 / 限流 / SSE / 知识库）、`test_safety.py`（注入拦截与脱敏）、`test_logging_setup.py`、`test_telemetry.py`（no-op 兜底）、`test_max_tokens.py`
   - 近期新增能力：**`test_freshness.py`**（时间解析 / 过期标注 / 跨度提示 / 数据侧审计 / 检索层 meta 透传回归）、**`test_tasks.py`**（注册表语义 / 有界排队 429 与 503 / 取消三检查点 / 断连即取消 / 端到端关生成器）、**`test_mcp.py`**（真实协议握手 / 分页 / `isError` 与协议级 error 区分 / 超时 / `.cmd` 包装 / 名字改写 / schema / 工具上限 / 熔断 / 单端故障隔离 / 快照脱敏）、**`test_skills.py`**（注册表平价检查 / 版本兼容拒绝 / 最小权限过滤 / 显式检索同校验 / 禁用回退）
   - 场景与界面：`test_jd_match.py` / `test_interview_review.py` / `test_metrics.py` / `test_ui_render.py` / `test_cache.py` / `test_llm.py`
@@ -274,7 +274,7 @@ app.py              # Streamlit 入口
 run_web.ps1 / run_api.ps1 / run_eval.py
 docs/screenshots/   # 端到端验证截图（JD 评分卡 / 工具时间线 / 复盘卡片，含窄屏）
 docs/ENGINEERING_SUMMARY.md   # 工程总结（规模 / 架构 / 决策 / 缺陷清单 / 量化证据 / 边界）
-tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话 / 安全 / 缓存 / 工具 /
+tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话 / 安全 / 缓存 / 工具 /
                     #   故障注入 / 数据时效 / 任务生命周期 / MCP / Skills / 双路径 A/B / 流式一致性 …）
 .github/workflows/ci.yml   # CI 门禁（ruff lint / 跨版本 test 矩阵 / 锁文件校验 / 依赖漏洞扫描）
 ```
@@ -335,7 +335,7 @@ tests/              # 39 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
   - **JD 匹配评分卡**：关联「AI 应用工程师」岗位 + 简历后提问，返回 **73/100**，分项 技能 80 / 经验 70 / 学历 0 / 项目 80，命中项 3 条、缺口项 3 条、面试准备重点 3 条，前端渲染为环形总分 + 分项进度条 + 命中/缺口双栏。
   - **面试复盘分区卡片**：提交一段模拟面试记录后返回 **65/100**（技术深度 60 / 问题结构 70 / 证据支撑 60），归档后在「面试复盘」页渲染为 四段式卡片：表现评分（4 枚环形指标）、追问链还原（Q1–Q4 步骤条）、薄弱点（警示色左边框）、改进动作（可勾选清单）。
   - **工具调用时间线**：`job_search` 模式下模型自主调用 `search_web`，前端渲染折叠摘要「调用了 1 个工具 · 10.1s」，展开显示工具名（等宽）/ 序号与耗时 / 入参摘要 / 返回摘要；本次联网实际超时降级，时间线如实显示「联网检索无结果或暂不可用，请基于已有信息作答」。
-- 测试套件：**458 条用例、覆盖率 91%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
+- 测试套件：**461 条用例、覆盖率 91%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
 
 ### 已知问题 / 注意
 - **必须配置有效 Key**：对话与知识库建库分别依赖 `OPENAI_API_KEY` 与 `EMBEDDING_API_KEY`（Embedding 默认走硅基流动 `BAAI/bge-m3`）。未配置或无效时仅能演示路由/建库/检索流程，真实生成会降级。
