@@ -123,8 +123,9 @@
   括号里的 `line 2788` 是父依赖 uvicorn 的行号，不是 uvloop 的位置，别被它带偏。
 - 解决：按 Linux 编译会得到的样子补一条 `uvloop==<ver> ; sys_platform != "win32"`（带 PyPI 全平台文件哈希，含 linux 轮子）；
   **两份锁都要补**（主锁供镜像构建，开发锁供 CI 安装）。删掉该行也能让 CI 变绿，但那等于 Linux 运行时悄悄少一个加速件，属静默偏差。
-- 判据：在 Linux 上 `pip install --require-hashes -r requirements-dev.lock.txt` 成功（CI 的 lock-verify 已覆盖）。
-  **注意这类问题在 Windows 上无法复现**——「平台专属依赖是否齐全」没有便宜的静态判据，只能真在 Linux 装一次，
-  这正是 lock-verify 与镜像构建的价值所在。
+- 判据：`python scripts/check_lock_platform_deps.py requirements.lock.txt requirements-dev.lock.txt`
+  —— 用 PyPI 元数据把每个包的 Linux 依赖集展开、与锁做差集，**差集必须为空**（本次就是靠它确认「uvloop 是唯一缺口」，
+  而不是反复推 CI 试出来）；另加在 Linux 上 `pip install --require-hashes -r requirements-dev.lock.txt` 成功（CI 的 lock-verify 已覆盖）。
+- 注意：**这类问题在 Windows 上无法复现**（同一个锁在 Windows 上装得好好的），所以静态检查与 Linux 侧安装两条都要留着。
 - 标签：pip,锁文件,跨平台,哈希模式,uvloop,供应链
 
