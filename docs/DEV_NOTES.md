@@ -53,6 +53,7 @@
 - **D 盘有「安全删除」策略**：批量删除会被拦截（提示 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`），需人工确认；临时目录/一次性虚拟环境建议建在 C 盘或当前工作区内，避免留垃圾删不掉。
 - **CI 的 `audit` 任务只告警不阻断**：步骤内自己吞掉 `pip-audit` 的非零退出，命中时打 `::warning` 并把明细写进 Job Summary（`continue-on-error` 只是兜底）。**它报红不代表业务失败**，处置口径见 README §九。
 - **`master` 已开分支保护（禁强推 / 禁删除）**：2026-09-20 起生效——改代码一律走「分支 → PR → 等 CI 绿 → 合并」，别直接往 master 提交。**代价是 master 不能再 `git push --force`**：若将来需要再次改写历史（如清除误提交的隐私文件），**必须先到 `Settings → Rules`（旧界面在 `Branches`）临时关闭该规则**，改完再开回。自查是否生效：仓库首页若还出现「Your master branch isn't protected」提示，就是没开。
+- **可选依赖要在开发锁里装齐**：`langgraph-checkpoint-sqlite` 属**生产可选**（未装自动降级为内存 checkpointer），但 `requirements-dev.txt` **必须**声明——否则跨进程恢复的用例会整体 skip，「恢复能力到底可不可用」永远没有测试兜底。改完 `requirements*.txt` 记得重编锁并补哈希（哈希格式见踩坑 4）。
 
 ## 六、踩坑记录
 
@@ -92,4 +93,22 @@
 - 原因：pip-compile 的哈希格式是反斜杠续行（需求行以「反斜杠」结尾，后续缩进的 --hash 行才算它的续行）。只把哈希写成缩进行、不加行尾反斜杠时，pip 不会把它们挂到上一条需求上
 - 解决：生成脚本改为「需求行 + 行尾反斜杠」，最后一哈希行不加；判据：格式类警告数与「Hashes are required」报错数必须为 0（网络类警告无关）
 - 标签：pip,锁文件,供应链,格式
+
+### 5. sqlite saver 的连接被垃圾回收关掉，checkpoint 静默降级成内存
+
+- 日期：2026-09-21
+- 现象：已装 `langgraph-checkpoint-sqlite`、日志也报 `backend=sqlite`，但跨进程续跑始终无效；后续任何读写都报 `Cannot operate on a closed database`
+- 原因：`SqliteSaver.from_conn_string()` 返回的是**上下文管理器**，`__enter__()` 取出 saver 后若把 cm 丢掉，它被垃圾回收时会触发 `__exit__` 关闭连接
+- 解决：自己建连接（`sqlite3.connect(path, check_same_thread=False)` + `SqliteSaver(conn)`）并把连接与 saver 放进 `_KEEPALIVE` 保活，`reset_checkpointer()` 时才释放；同时新增 `_probe_saver()` 可用性自检——**import 成功不等于版本兼容**，正是它把这个问题从「静默降级」变成「日志可见」
+- 判据：`gc.collect()` 之后 saver 仍能读写（`tests/test_checkpoint_resume.py::test_sqlite_saver_survives_garbage_collection`）
+- 标签：langgraph,sqlite,checkpoint,GC,可选依赖
+
+### 6. `get_state()` 会合并 pending_writes，用 `snapshot.next` 判断「轮次是否结束」会误判
+
+- 日期：2026-09-21
+- 现象：进程在工具节点执行中途硬崩（`os._exit(9)`）后，同一 thread 续跑**返回空字符串**——模型与工具一次都没再跑，用户拿到空答案
+- 原因：`app.get_state()` 会把 `pending_writes` 合并进 state，`snapshot.next` 因此变成空元组；按「next 为空 = 本轮已完成」判断就会直接复用结果，可那一轮其实停在**未执行的工具调用**上（state 里只有用户消息）
+- 解决：收束判据改为「state 中是否存在**非空 AIMessage**」（复用 `_final_text`）；未收束则 `app.invoke(None)` 纯续跑，未完成的工具节点会重跑一次（at-least-once）
+- 判据：`tests/test_checkpoint_cross_process.py::test_resume_after_hard_crash_finishes_the_turn`（续跑输出非空 + 工具计数为 2）
+- 标签：langgraph,checkpoint,pending_writes,续跑,at-least-once
 
