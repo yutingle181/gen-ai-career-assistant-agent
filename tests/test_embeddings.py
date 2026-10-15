@@ -30,6 +30,25 @@ class _StubEmbedder(BaseEmbedder):
         return 2
 
 
+def test_embedding_label_reflects_effective_model(monkeypatch):
+    """标注的必须是**真正生效**的向量模型（2026-10-15 修正）。
+
+    回归背景：走 local 兜底跑出来的评测报告里标着「local / text-embedding-v3」——
+    provider 明明是本地，却挂着云端模型名，读报告的人会误以为还在用云端向量，
+    也无法据此判断"换向量模型后数字还能不能比"。
+    """
+    monkeypatch.setattr(config, "EMBEDDING_PROVIDER", "api")
+    monkeypatch.setattr(config, "EMBEDDING_MODEL", "text-embedding-v3")
+    assert config.embedding_label() == "api/text-embedding-v3"
+
+    monkeypatch.setattr(config, "EMBEDDING_PROVIDER", "local")
+    monkeypatch.setattr(config, "LOCAL_EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")
+    label = config.embedding_label()
+    assert label == "local/BAAI/bge-small-zh-v1.5"
+    assert "text-embedding-v3" not in label, "local 模式不得显示未生效的云端模型名"
+    assert config.describe()["Embedding"] == label, "/health 的配置快照必须与报告同一口径"
+
+
 def test_api_embedder_requires_key(monkeypatch):
     monkeypatch.setattr(config, "EMBEDDING_API_KEY", "")
     monkeypatch.setattr(config, "OPENAI_API_KEY", "")

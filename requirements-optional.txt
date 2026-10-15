@@ -2,6 +2,12 @@
 # 注意：会拉入 torch（约 1-2GB），普通笔记本 / 无独显环境不建议安装
 # 如需本地 CPU 版 torch，请先单独执行：
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#
+# 两个实测坑（2026-10-15）：
+# 1) 换向量模型或维度后**必须重建索引**（faiss 维度与向量不一致会直接检索失败），
+#    重建方式：run_eval.py --rebuild，或删除 data/index/<kb>/ 后重新建库；
+# 2) 国内网络下载 huggingface.co 上的模型会超时，先设镜像再跑：
+#    PowerShell: $env:HF_ENDPOINT='https://hf-mirror.com'
 
 sentence-transformers>=3.0
 

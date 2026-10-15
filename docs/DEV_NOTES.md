@@ -129,3 +129,81 @@
 - 注意：**这类问题在 Windows 上无法复现**（同一个锁在 Windows 上装得好好的），所以静态检查与 Linux 侧安装两条都要留着。
 - 标签：pip,锁文件,跨平台,哈希模式,uvloop,供应链
 
+### 8. 模型/向量免费额度耗尽，让 /health 静默退成 degraded（换模型前先探测）
+
+- 日期：2026-10-15
+- 现象：`/health` 从 ok 变成 `{"status":"degraded","llm":false,"embedding":false}`。服务照常起、接口照常 200，
+  但模型与向量都调不动（回答走降级）。日志里只有一条 403：`AllocationQuota.FreeTierOnly`
+  —— "Free quota exhausted… please add funds or disable the \"use free tier only\" mode"。
+- 原因：`.env` 把模型名**写死**（`MODEL_NAME=qwen-plus-latest`、`EMBEDDING_MODEL=text-embedding-v3`），
+  而这两个模型的免费额度恰好用尽。控制台里其它模型还各剩百万级 tokens ——**不是没额度，是钉错了模型**。
+  最坑的是它不抛异常、不影响启动，只在 `/health` 里体现，不主动查就会以为"代码坏了"。
+- 解决：新增根目录 `probe_models.py`（只用标准库，虚拟环境坏了也能跑）：逐个候选发**最小请求**
+  （chat 用 `max_tokens=1`、embeddings 用 4 个字），输出「模型 → OK(HTTP 200) / FAIL(403|400 + 错误码 + 截断 message)」，
+  **只报密钥长度不报值**，退出码 0/10/20（10=会话可用但无可用向量，20=无可用会话）。
+  实测结论：会话侧 7 个候选全 200（deepseek-v4.1-flash / qwen3.8-flash / qwen3.8-27b / qwen3.8-max-0902 /
+  glm-5.3 / kimi-k3 / deepseek-v4-flash-0731），仅当前钉的 `qwen-plus-latest` 403；
+  向量侧 `text-embedding-v3/v4/v2` 全部 400 额度耗尽、`qwen3-embedding-*` 404 或 Access denied、
+  `multimodal-embedding-v1` 该兼容模式不支持 → 向量侧改走 `EMBEDDING_PROVIDER=local`（BAAI/bge-small-zh-v1.5）。
+- 判据：`GET /health` 回到 `status=ok` 且 `llm/embedding=true`；探测原始结论留在 `data/eval/probe_models.json`。
+- 注意：
+  - **换向量模型或维度后必须重建 faiss 索引**（`run_eval.py --rebuild`），否则维度不匹配直接检索失败，
+    这是最容易漏、报错最莫名其妙的一步；
+  - 按厂商生效的优化要重新评估：`PROMPT_CACHE_MODELS=("qwen",)` 意味着 prompt 缓存对 deepseek 系不生效；
+  - `cache.py` 的单价表未收录的模型按 0 计（有测试契约钉住，不改行为），但现在会**告警一次**，
+    否则"0 成本"会被误当成"不花钱"。
+
+### 9. 模型路由把厂商写死，换成 deepseek 后快模型静默失效
+
+- 日期：2026-10-15
+- 现象：为了换额度把 `MODEL_STRONG` 改成 deepseek 系之后，`MODEL_FAST=qwen3.8-flash` **永远不被选中** ——
+  不报错、不打日志，只是所有请求都走强模型，分级路由的收益悄悄归零。
+- 原因：`select_model()` 里有一句 `if not config.MODEL_STRONG.lower().startswith("qwen"): return MODEL_STRONG`。
+  这是 9.2.A 当时"生产 qwen-plus / qwen-turbo 双模型部署"的假设，换厂商后前提直接不成立。
+- 解决：抽 `_routing_available()`：开关开 + `MODEL_FAST` 非空 + 与 `MODEL_STRONG`（去空格、忽略大小写）不是同一个模型
+  即可降级，**跨厂商同样生效**；其余保守分支全部不动（带 `user_context` / 非 tutorial,qa 模式 /
+  复杂关键词 / 超长 query / 任何异常 → 一律回落 STRONG）。`tests/test_model_routing.py` 用三条断言钉住：
+  跨厂商可降级、快模型缺失或与强模型同款时不降级、路由内部异常回落 STRONG。
+- 判据：`pytest tests/test_model_routing.py` 全绿；实际请求日志里能看到两条路径分别用了哪个模型。
+- 注意：这类"厂商硬编码"最隐蔽的地方是**文档也一起变成假话** —— `config.py` 注释与 `.env.example`
+  原文都写着"仅 qwen 家族生效"，改代码不改文档，下一个人会照着错误前提做决策。
+- 标签：模型路由,厂商耦合,静默失效
+
+### 10. 换 PyPI 源：镜像"能访问"不等于"能装到包"
+
+- 日期：2026-10-15
+- 现象：`pip install sentence-transformers` 报
+  `Could not find a version that satisfies the requirement sentence-transformers>=3.0 (from versions: none)`，
+  而 `pip config list` 里明明配了国内镜像（清华 `.../pypi/web/simple`）。
+- 原因：那个镜像地址对本机**取不到包清单**。而"能不能用"不能用根路径探测来判断 ——
+  各镜像根路径的表现不一致（有的 200、有的 403），根路径可达 ≠ 包列表可读。
+- 解决：逐个候选镜像用**真实包路径** `<index>/sentence-transformers/` 探测，取第一个能列出包的。
+  本机实测可用：阿里云（505ms）、腾讯云（375ms）、USTC（404ms）、华为云（356ms）、官方 pypi（842ms）。
+- 判据：pip 退出码 0，且 `import sentence_transformers` 成功、`SentenceTransformer(...).encode()` 能出向量。
+- 附带：国内访问 huggingface.co 会超时，下载模型前先设 `$env:HF_ENDPOINT='https://hf-mirror.com'`
+  （已写进 `requirements-optional.txt` 与 README，免得一换机器就踩）。
+- 标签：pip,镜像,可选依赖,HuggingFace镜像
+
+### 11. 「未改动代码也会失败」的测试才是真 flaky：跨进程硬崩续跑的工具执行次数
+
+- 日期：2026-10-15
+- 现象：`tests/test_checkpoint_cross_process.py::test_resume_after_hard_crash_finishes_the_turn`
+  偶发失败：`AssertionError: 未完成的工具节点会重跑一次（at-least-once） assert 3 == 2` ——
+  崩溃后续跑里工具多执行了一次。
+- 排查：先用 `git stash` 把本轮全部改动 stash 掉再跑，**仍然失败**；再在未改动代码上重复 5 次，
+  分布是 **3,2,2,2,3**（2/5 失败）；而逐个还原任何一个互不相关的文件都能让它"通过"。
+  结论：与代码改动无关，是**时序敏感**（崩在哪一落盘点决定重放几个节点），
+  任何"改一点就能过"的假象都是噪声——这也是为什么必须用"未改动代码 + 多次重复"来证伪。
+- 原因：`os._exit(9)` 发生在**工具函数内部**，此刻 assistant 节点那条写入是否已提交到 SQLite
+  不确定（页缓存 / WAL 落盘时机）。已落盘 → 续跑只重放 tools 节点，工具共执行 2 次；
+  未落盘 → 连 assistant 一起重放，模型再产出一遍 tool_calls，工具共执行 3 次。
+- 解决：把断言从 `== 2` 改成 `>= 2`，并把理由写进 docstring —— 原断言把
+  "崩溃瞬间的落盘时机"误当成了系统语义，而本用例要守的语义是 **at-least-once**：
+  ① 工具至少重跑一次（不被跳过）② 这一轮一定能收束出答案。真正"重发已完成轮次不重复执行"
+  由同文件另一条用例守住（无崩溃、确定性强）。
+- 判据：未改动代码上连续 5 次都通过；`git stash` 前后行为一致（不再"改点啥就过"）。
+- 附带（同一个晚上踩的第二个坑）：多个本地实例**共用 `data/checkpoints.sqlite`** 时，
+  后起的实例会在 checkpointer 建表上抢写锁而**卡死**（`/health` 一直超时，但进程活着、
+  日志可能还打出过一个 200）—— 本地同时起多个实例时用 `CHECKPOINT_DB_PATH` 指向不同文件。
+- 标签：flaky测试,at-least-once,跨进程,checkpoint,sqlite锁
+

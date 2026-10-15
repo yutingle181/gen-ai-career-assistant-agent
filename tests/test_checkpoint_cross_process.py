@@ -77,8 +77,18 @@ def test_resume_after_hard_crash_finishes_the_turn(tmp_path):
     """进程在工具执行中途被硬崩（os._exit）→ 新进程同 thread 能把该轮跑完。
 
     语义边界（诚实版）：这里提供的是 **at-least-once**——
-    已完成的节点复用、**未完成的节点会重跑**，所以工具执行次数会从 1 变成 2。
+    已完成的节点复用、**未完成的节点会重跑**，所以工具执行次数至少从 1 变成 2。
     我们不假装 exactly-once：真正要防重复副作用的工具（写文件/发请求）应自己做幂等。
+
+    为什么断言用 `>= 2` 而不是 `== 2`（2026-10-15 实测修正）：
+        `os._exit(9)` 发生在**工具函数内部**，此刻 assistant 节点那条写入是否已经
+        提交到 SQLite 是不确定的——受页缓存/WAL 落盘时机影响。
+        · 已落盘：续跑只重放 tools 节点 → 工具总共执行 2 次；
+        · 未落盘：续跑连 assistant 一起重放 → 模型再产出一遍 tool_calls → 工具总共执行 3 次。
+        实测同一份代码 5 次里有 2 次落在后者（分布 3,2,2,2,3），所以 `== 2` 是一条
+        **不成立的承诺**：它会把"崩溃瞬间的落盘时机"误当成系统语义。
+        真正稳定的两条不变式是：① 工具至少重跑一次（不是被跳过）② 这一轮一定能收束出答案。
+        而"重发一个**已完成**的轮次不重复执行工具"由上一条用例单独守住（那条无崩溃、确定性强）。
     """
     db = tmp_path / "ckpt.sqlite"
     counter = tmp_path / "runs.txt"
@@ -90,8 +100,10 @@ def test_resume_after_hard_crash_finishes_the_turn(tmp_path):
 
     code2, out2 = _run_probe(db, thread, counter)
     assert code2 == 0, f"崩溃后的续跑失败：\n{out2}"
-    assert _count(counter) == 2, "未完成的工具节点会重跑一次（at-least-once）"
+    runs = _count(counter)
+    assert runs >= 2, f"未完成的工具节点应至少重跑一次（at-least-once），实际执行 {runs} 次：\n{out2}"
     assert "最终答案" in out2, f"续跑应能收束出最终答案：\n{out2}"
+    print(f"[OK] 崩溃续跑：工具共执行 {runs} 次（>=2 即可，落盘时机决定是 2 还是 3）")
 
 
 def test_probe_helper_is_not_shipped_as_test(tmp_path):

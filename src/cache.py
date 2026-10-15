@@ -29,6 +29,9 @@ _PRICE_TABLE = {
     "qwen-plus-2025-07-28": {"in": 0.11, "out": 0.30},
 }
 
+# 已就「未收录单价」告警过的模型，避免每次调用都刷屏（同一个模型只提醒一次）
+_WARNED_UNPRICED: set[str] = set()
+
 
 # ---------------------------------------------------------------- 缓存
 class ResultCache:
@@ -113,6 +116,13 @@ class CostTracker:
         model = model or config.MODEL_NAME
         price = _PRICE_TABLE.get(model)
         if not price:
+            # 行为不变（未收录按 0 计，有测试契约钉住），但必须让"0 成本"可被看见：
+            # 换了供应商/模型名后若没补单价，这里显示 0 会被误当成"不花钱"。
+            if model not in _WARNED_UNPRICED:
+                _WARNED_UNPRICED.add(model)
+                logger.warning(
+                    "模型 %s 未收录单价，成本估算按 0 计（只能做相对比较，勿当真实费用）", model
+                )
             return 0.0
         return (
             self.prompt_tokens / 1_000_000 * price["in"]
