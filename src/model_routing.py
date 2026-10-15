@@ -1,9 +1,13 @@
 """模型路由：按请求复杂度选择强 / 快模型（9.2.A）。
 
-仅当强模型为 qwen 家族（生产 qwen-plus）且 ENABLE_MODEL_ROUTING 开启时生效；
-保守默认走强模型（MODEL_STRONG），仅对明确简单的请求降级到 MODEL_FAST(qwen-turbo)。
+当 ENABLE_MODEL_ROUTING 开启、且 MODEL_FAST 确实是一个与 MODEL_STRONG 不同的模型时生效；
+保守默认走强模型（MODEL_STRONG），仅对明确简单的请求降级到 MODEL_FAST。
 路由判定纯本地、零网络、零额外延迟，与网关 ChatResponseCache / 召回 ResultCache /
 Prompt 缓存三层互补、互不影响。
+
+2026-10-15：去掉了「强模型必须是 qwen 家族」的厂商硬编码。此前把 MODEL_STRONG 换成
+deepseek 系（换额度时踩到）之后，MODEL_FAST 会**静默失效**——不报错、只是永远走强模型，
+排查时极难发现。降级与否只取决于「快模型存在且与强模型不同」，与厂商无关。
 """
 
 from __future__ import annotations
@@ -48,6 +52,19 @@ def _is_simple_query(query: str) -> bool:
     return True
 
 
+def _routing_available() -> bool:
+    """是否具备「降级到快模型」的前提。
+
+    三个条件缺一不可：开关打开、MODEL_FAST 非空、MODEL_FAST 与 MODEL_STRONG 不是同一个模型
+    （比较时去空格并忽略大小写，避免把同一个模型当成"已降级"而白白丢掉路由收益）。
+    """
+    fast = (config.MODEL_FAST or "").strip()
+    strong = (config.MODEL_STRONG or "").strip()
+    if not config.ENABLE_MODEL_ROUTING or not fast:
+        return False
+    return fast.lower() != strong.lower()
+
+
 def select_model(query: str, mode: str | None = None,
                  user_context: str | None = None, history=None) -> str:
     """返回本轮应使用的模型名（MODEL_FAST 或 MODEL_STRONG）。
@@ -56,10 +73,7 @@ def select_model(query: str, mode: str | None = None,
     任何异常都回落到 MODEL_STRONG，绝不中断请求。
     """
     try:
-        if not config.ENABLE_MODEL_ROUTING:
-            return config.MODEL_STRONG
-        # 仅 qwen 家族支持双模型路由（生产 qwen-plus / qwen-turbo）
-        if not config.MODEL_STRONG.lower().startswith("qwen"):
+        if not _routing_available():
             return config.MODEL_STRONG
         # 带 user_context（JD+简历重任务）：走强模型，保证质量
         if user_context:

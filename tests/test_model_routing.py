@@ -1,8 +1,10 @@
 """分级模型路由（9.2.A）测试（确定性、无真实网络）。
 
 覆盖：
-- 开关关闭 / 非 qwen 部署 / 带 user_context / 复杂或超长 query / 非简单 mode 均回落 MODEL_STRONG；
-- 简单短 query 在 tutorial/qa 模式且无 user_context 时降级到 MODEL_FAST；
+- 开关关闭 / 快模型缺失或与强模型同款 / 带 user_context / 复杂或超长 query / 非简单 mode
+  均回落 MODEL_STRONG；
+- 简单短 query 在 tutorial/qa 模式且无 user_context 时降级到 MODEL_FAST，**跨厂商同样生效**；
+- 路由内部异常时回落 MODEL_STRONG；
 - get_chat_model 按 (模型名, 温度, 流式) 分别缓存；
 - SessionManager 主链路把路由结果透传给 llm_invoke；
 - agents/base.respond / respond_stream 把 model 透传给 llm 调用。
@@ -32,10 +34,48 @@ def test_disabled_returns_strong(monkeypatch):
     assert select_model("你好", mode="qa") == "qwen-plus"
 
 
-def test_non_qwen_returns_strong(_qwen, monkeypatch):
-    # 仅当强模型为 qwen 家族才路由；deepseek-chat 默认部署不路由，零回归
-    monkeypatch.setattr(config, "MODEL_STRONG", "deepseek-chat")
-    assert select_model("你好", mode="qa") == "deepseek-chat"
+def test_cross_vendor_can_downgrade(monkeypatch):
+    """跨厂商也能降级：deepseek 主模型 + qwen 快模型应正常路由。
+
+    回归背景（2026-10-15）：换额度把 MODEL_STRONG 换成 deepseek 系后，
+    原实现因硬编码「仅 qwen 家族生效」而**静默不走路由** —— 不报错，只是永远用强模型，
+    路由收益悄悄归零。
+    """
+    monkeypatch.setattr(config, "ENABLE_MODEL_ROUTING", True)
+    monkeypatch.setattr(config, "MODEL_STRONG", "deepseek-v4.1-flash")
+    monkeypatch.setattr(config, "MODEL_FAST", "qwen3.8-flash")
+    monkeypatch.setattr(config, "ROUTING_SIMPLE_MODES", ("tutorial", "qa"))
+    assert select_model("谢谢", mode="qa") == "qwen3.8-flash"
+    # 复杂请求仍走强模型，跨厂商不影响这条保守策略
+    assert select_model("帮我写一段自我介绍", mode="qa") == "deepseek-v4.1-flash"
+
+
+def test_fast_missing_or_same_as_strong_stays_strong(monkeypatch):
+    """快模型没配、或与强模型其实是同一个模型时不得「降级」（否则等于没路由还白丢收益）。"""
+    monkeypatch.setattr(config, "ENABLE_MODEL_ROUTING", True)
+    monkeypatch.setattr(config, "ROUTING_SIMPLE_MODES", ("tutorial", "qa"))
+    monkeypatch.setattr(config, "MODEL_STRONG", "deepseek-v4.1-flash")
+
+    monkeypatch.setattr(config, "MODEL_FAST", "")
+    assert select_model("你好", mode="qa") == "deepseek-v4.1-flash"
+
+    monkeypatch.setattr(config, "MODEL_FAST", "   ")
+    assert select_model("你好", mode="qa") == "deepseek-v4.1-flash"
+
+    # 同一模型（大小写与空格差异不算不同）
+    monkeypatch.setattr(config, "MODEL_FAST", " DeepSeek-V4.1-Flash ")
+    assert select_model("你好", mode="qa") == "deepseek-v4.1-flash"
+
+
+def test_exception_falls_back_to_strong(_qwen, monkeypatch):
+    """路由内部异常必须回落强模型，不能把异常抛给请求链路。"""
+    import src.model_routing as mr
+
+    def _boom(query):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(mr, "_is_simple_query", _boom)
+    assert select_model("你好", mode="qa") == "qwen-plus"
 
 
 def test_user_context_forces_strong(_qwen):

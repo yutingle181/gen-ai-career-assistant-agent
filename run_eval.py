@@ -132,6 +132,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="每次工具调用的失败概率（0~1）；不填或 0 视为 1.0（全失败）",
     )
     parser.add_argument(
+        "--report-out",
+        default="",
+        help="把 Markdown 报告写到指定路径（如 docs/RAG_EVAL_REPORT.md 便于入库）；不填则沿用 Agent_output/ 本地产物",
+    )
+    parser.add_argument(
         "--fault-seed",
         type=int,
         default=0,
@@ -252,7 +257,13 @@ def main() -> int:
             logger.warning("工具调用 A/B 未完成：%s", exc)
             print(f"工具调用 A/B 未完成（{type(exc).__name__}）：{exc}")
 
-    report_path = save_report(results, pipeline, k=args.top_k, tool_comparison=tool_comparison)
+    report_path = save_report(
+        results,
+        pipeline,
+        k=args.top_k,
+        tool_comparison=tool_comparison,
+        out_path=args.report_out or None,
+    )
     print(f"\n评测报告已生成：{report_path}")
     return 0
 

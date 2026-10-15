@@ -72,9 +72,10 @@ REQUEST_TIMEOUT: int = _int("REQUEST_TIMEOUT", 120)
 MAX_RETRIES: int = _int("MAX_RETRIES", 3)
 
 # ---------------------------------------------------------------- 分级模型路由（9.2.A）
-# 仅当强模型为 qwen 家族（生产 qwen-plus）且开启开关时生效：
-# 简单问答 / 闲聊走低成本的 qwen-turbo，长任务 / 复杂编排仍走 qwen-plus。
-# 非 qwen 部署（如默认 deepseek-chat）或未开启时，全部回落 MODEL_STRONG，行为零回归。
+# 仅当「MODEL_FAST 已配置且与 MODEL_STRONG 不是同一个模型」且开启开关时生效：
+# 简单问答 / 闲聊走低成本的快模型（如 qwen3.8-flash），长任务 / 复杂编排仍走 MODEL_STRONG。
+# 不满足条件（含未配置快模型、或两者其实是同一个模型）时全部回落 MODEL_STRONG，行为零回归。
+# 注意：这里**不绑定厂商** —— 曾因硬编码「仅 qwen 家族生效」导致换成 deepseek 系后静默失效。
 MODEL_FAST: str = os.getenv("MODEL_FAST", "qwen-turbo").strip()
 MODEL_STRONG: str = os.getenv("MODEL_STRONG", MODEL_NAME).strip()
 ENABLE_MODEL_ROUTING: bool = _bool("ENABLE_MODEL_ROUTING", True)
@@ -285,13 +286,25 @@ def embedding_ready() -> bool:
     return EMBEDDING_PROVIDER == "local" or bool(EMBEDDING_API_KEY)
 
 
+def embedding_label() -> str:
+    """当前**真正生效**的向量模型标识（用于日志 / /health / 评测报告）。
+
+    为什么需要它：`EMBEDDING_MODEL` 只在 provider=api 时才生效，local 模式下真正跑的是
+    `LOCAL_EMBEDDING_MODEL`。不区分就会把本地兜底跑出的报告标成云端模型名
+    （2026-10-15 实测：报告里出现「local / text-embedding-v3」这种自相矛盾的标注）。
+    """
+    if EMBEDDING_PROVIDER == "local":
+        return f"local/{LOCAL_EMBEDDING_MODEL}"
+    return f"{EMBEDDING_PROVIDER}/{EMBEDDING_MODEL}"
+
+
 def describe() -> dict:
     """供 UI / 日志展示的配置快照（已脱敏）。"""
     return {
         "模型": MODEL_NAME,
         "模型地址": OPENAI_BASE_URL,
         "API Key": mask_key(OPENAI_API_KEY),
-        "Embedding": f"{EMBEDDING_PROVIDER} / {EMBEDDING_MODEL}",
+        "Embedding": embedding_label(),
         "重排": RERANK_PROVIDER,
         "检索": f"BM25={USE_BM25} 向量={USE_VECTOR} 融合={FUSION} top_k={TOP_K}",
         "切分": f"size={CHUNK_SIZE} overlap={CHUNK_OVERLAP}",

@@ -62,3 +62,7 @@ data/eval/
 *.faiss
 web_home.png
 *.tmp
+
+# sqlite WAL 模式必然产生的附属文件（不忽略会一直出现在 git status）
+*.sqlite-shm
+*.sqlite-wal

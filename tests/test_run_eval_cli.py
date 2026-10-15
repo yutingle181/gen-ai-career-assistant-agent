@@ -119,6 +119,7 @@ def test_build_parser_defaults():
     assert args.tool_ab_model == ""
     assert args.tool_ab_samples == 0
     assert args.no_web is False
+    assert args.report_out == ""  # 空 = 沿用 Agent_output/ 本地产物
     print("[OK] 默认参数契约一致")
 
 
@@ -137,6 +138,7 @@ def test_build_parser_explicit_values():
             "--tool-ab-model", "qwen-turbo",
             "--tool-ab-samples", "15",
             "--no-web",
+            "--report-out", "docs/RAG_EVAL_REPORT.md",
         ]
     )
     assert args.kb == "mykb"
@@ -150,6 +152,7 @@ def test_build_parser_explicit_values():
     assert args.tool_ab_model == "qwen-turbo"
     assert args.tool_ab_samples == 15
     assert args.no_web is True
+    assert args.report_out == "docs/RAG_EVAL_REPORT.md"
     print("[OK] 显式参数解析正确")
 
 
@@ -176,8 +179,19 @@ def test_main_without_tool_ab_keeps_report_only(monkeypatch):
     assert len(calls.save_report) == 1
     assert calls.save_report[0]["tool_comparison"] is None
     assert calls.save_report[0]["k"] == 5
+    assert calls.save_report[0]["out_path"] is None, "未传 --report-out 时必须传 None（沿用 Agent_output/ 本地产物）"
     assert len(calls.run_all) == 1
     print("[OK] 未开 --tool-ab：跳过 A/B 且报告降级为纯检索")
+
+
+def test_main_forwards_report_out(monkeypatch):
+    """传了 --report-out 就必须原样透传给 save_report（报告才能入库）。"""
+    calls = _install_stubs(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["run_eval.py", "--report-out", "docs/RAG_EVAL_REPORT.md"])
+
+    assert run_eval.main() == 0
+    assert calls.save_report[0]["out_path"] == "docs/RAG_EVAL_REPORT.md"
+    print("[OK] --report-out 已透传给 save_report")
 
 
 def test_main_tool_ab_truncates_samples_and_passes_flags(monkeypatch):

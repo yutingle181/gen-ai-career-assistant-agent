@@ -17,9 +17,11 @@ FastAPI 服务，内置评测体系（Recall@5 / MRR / HitRate / 幻觉率 + 双
 | 维度 | 现值 |
 | --- | --- |
 | 服务代码 | `src/` **70 个 Python 文件**（最大三块：`tools.py` 27KB、`session.py` 22KB、`api/routers/chat.py` 19.6KB） |
-| 测试 | `tests/` **40 个 `test_*.py`** + `smoke_test.py`；**pytest 实际收集 465 条用例**（源码级 435 个用例函数） |
-| 覆盖率 | `pytest --cov=src` **91%**（4836 语句 / 漏 420）；`tasks.py` / `safety.py` / `state.py` / `eval/runner.py` 达 100% |
+| 测试 | `tests/` **40 个 `test_*.py`** + `smoke_test.py`；**pytest 实际收集 473 条用例**（源码级 443 个用例函数） |
+| 覆盖率 | `pytest --cov=src` **92%**（4860 语句 / 漏 413）；`tasks.py` / `safety.py` / `state.py` / `eval/runner.py` 达 100% |
 | 入口 | `app.py`（Streamlit）、`run_eval.py`（评测 CLI）、`run_api.ps1` / `run_web.ps1`、Dockerfile + compose |
+| 运维脚本 | `probe_models.py`（模型 / 向量额度探测，只标准库、不打印密钥）、`scripts/rebuild_index_from_chunks.py`（换向量模型后从已存片段重建 faiss 索引） |
+| 评测基线 | `docs/RAG_EVAL_REPORT.md`（2026-10-15 实测：四组检索对照 + 工具双路径 A/B + 轨迹级指标；换模型/向量后必须重跑，否则数字不可比） |
 | 依赖治理 | `requirements.lock.txt`（**101 包**）/ `requirements-dev.lock.txt`（**107 包**），钉全部传递依赖；2026-09-20 LangChain/LangGraph 跨大版本升级后重编（过程与证据见 `docs/DEP_UPGRADE_PLAN.md`） |
 | 业务面 | 9 个场景 · 5 组 API · 3 类消费方（Streamlit / jobseeker 前端 / API 调用方） |
 
@@ -144,4 +146,4 @@ FastAPI 服务，内置评测体系（Recall@5 / MRR / HitRate / 幻觉率 + 双
 - **并发写仲裁**：结构上没有（串行单写者），只能讲清"引入并行后怎么做"。
 - **覆盖率缺口**：OTel 真实 tracer 路径需装 SDK 才能覆盖（`telemetry.py` 67%）。
 - **`docs/DEV_NOTES.md`**：已创建（2026-09-19，preflight-check skill 阶段 0）：项目速览 / 常用命令 / 端口（8501 Web、8000 API）/ 目录与"偏离默认"约定 + 踩坑记录；门禁里的 DEV_NOTES WARN 项随之消除。
-- **评测集规模**：20 条 / 知识库 10 片段 —— Recall@5 已饱和，指标分辨力需扩大数据规模才有意义。
+- **评测集规模**：20 条 / 知识库 7 片段（`samples`）—— Recall@5 已饱和（四组均落在 65–70%），指标分辨力需扩大数据规模才有意义。2026-10-15 复测（换 deepseek-v4.1-flash + 本地 BGE 后）：见 `docs/RAG_EVAL_REPORT.md`，混合 RRF 23ms、+LLM 重排 9477ms，工具双路径成功率均 100%。

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from pathlib import Path
 
 from .. import config, faults
 from ..logging_setup import get_logger
@@ -41,7 +42,7 @@ def render_report(
         "",
         f"- 生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"- 模型：`{config.MODEL_NAME}` @ `{config.OPENAI_BASE_URL}`",
-        f"- Embedding：`{config.EMBEDDING_PROVIDER}` / `{config.EMBEDDING_MODEL}`",
+        f"- Embedding：`{config.embedding_label()}`",
     ]
     if stats:
         lines.append(
@@ -110,7 +111,7 @@ def render_report(
 
     snapshot: dict = {
         "model": config.MODEL_NAME,
-        "embedding": f"{config.EMBEDDING_PROVIDER}/{config.EMBEDDING_MODEL}",
+        "embedding": config.embedding_label(),
         "chunk": {"size": config.CHUNK_SIZE, "overlap": config.CHUNK_OVERLAP},
         "experiments": [{"name": r.name, "config": r.config} for r in results],
     }
@@ -210,12 +211,26 @@ def _conclusions(results: Sequence[MetricResult]) -> list[str]:
 
     if vec and bm25 and hybrid:
         best_single = max(vec, bm25, key=lambda r: r.recall_at_k)
+        delta_pp = (hybrid.recall_at_k - best_single.recall_at_k) * 100
+        # 差异接近 0 时不能说"确实互补"：小知识库（片段少）Recall 很容易触顶，
+        # 此时这句话会把"没测出差异"包装成"验证了收益"（2026-10-15 修正）。
+        if abs(delta_pp) < 0.5:
+            verdict = (
+                "本次样本量下两者持平（差异不足 0.5 个百分点）。"
+                "小知识库容易让 Recall 触顶、掩盖两路召回的差异；"
+                "样本量或知识库变大后这项差异才有统计意义，届时再决定是否默认开启混合检索。"
+            )
+        elif delta_pp > 0:
+            verdict = "说明关键词匹配与语义召回确实互补，混合检索值得作为默认配置。"
+        else:
+            verdict = (
+                "混合检索反而低于最优单路，通常意味着两路召回高度重叠、"
+                "或融合方式需要重调（可试 RRF 的 k 值/权重），先别默认开启。"
+            )
         out.append(
             f"- 单路检索中 **{best_single.name}** 的 Recall@K 为 {_pct(best_single.recall_at_k)}；"
             f"混合检索（RRF）为 {_pct(hybrid.recall_at_k)}，"
-            f"相对最优单路 {'提升' if hybrid.recall_at_k >= best_single.recall_at_k else '变化'} "
-            f"{abs(hybrid.recall_at_k - best_single.recall_at_k) * 100:.1f} 个百分点。"
-            "说明关键词匹配与语义召回确实互补，混合检索值得作为默认配置。"
+            f"相对最优单路 {'提升' if delta_pp >= 0 else '下降'} {abs(delta_pp):.1f} 个百分点。" + verdict
         )
     if hybrid and llm_rr:
         delta = llm_rr.mrr - hybrid.mrr
@@ -250,11 +265,24 @@ def save_report(
     k: int = 5,
     tool_comparison: ToolComparison | None = None,
     trajectory: dict | None = None,
+    out_path: str | Path | None = None,
 ) -> str:
-    """渲染并保存报告，返回路径。"""
+    """渲染并保存报告，返回路径。
+
+    ``out_path`` 为空时**保持原行为**：写到 ``Agent_output/Eval_Report*.md``
+    （本地产物，已被 .gitignore 忽略）。给定路径则写到该处并自动创建父目录 ——
+    用于把报告**纳入版本库**（如 ``docs/RAG_EVAL_REPORT.md``）：简历与面试里引用的
+    数字必须和仓库里能翻到的那份报告是同一份，否则就会出现「本地有报告、仓库没有」的数字漂移。
+    """
     content = render_report(
         results, pipeline, k=k, tool_comparison=tool_comparison, trajectory=trajectory
     )
-    path = save_file(content, "Eval_Report")
+    if out_path:
+        target = Path(out_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        path = str(target)
+    else:
+        path = save_file(content, "Eval_Report")
     logger.info("评测报告已生成 | %s", path)
     return path

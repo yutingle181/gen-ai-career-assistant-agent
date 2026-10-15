@@ -79,7 +79,26 @@ python run_eval.py --kb default --top-k 5
 
 # 额外跑「显式检索 vs Function Calling」双路径 A/B（钉同一模型、可限样本数控制成本）
 python run_eval.py --kb default --tool-ab --tool-ab-model qwen-turbo --tool-ab-samples 15
+
+# 把报告写进版本库（简历/面试引用的数字与仓库里这份报告是同一份）
+python run_eval.py --report-out docs/RAG_EVAL_REPORT.md
 ```
+
+> **换向量模型后必须重建索引**：`faiss` 索引维度与向量模型绑定，换模型/换维度后旧索引不可复用，
+> 表现为检索直接报错。用 `python run_eval.py --rebuild` 重建，或删掉 `data/index/<kb>/` 后重新建库。
+> 若知识库来自上传目录、源文档已不在手边，可用
+> `python scripts/rebuild_index_from_chunks.py --kb <名称>`：直接读回已切好的片段重新向量化
+> （不重新解析文档、不改切分参数，因此指标变化只来自向量模型本身）。
+>
+> **模型 / 向量额度自检**：`python probe_models.py` 逐个候选发最小请求，输出
+> 「模型 → OK(HTTP 200) / FAIL(403|400 + 错误码 + 截断 message)」，只报密钥长度不报值；
+> 退出码 0=两侧都可用、10=会话可用但无可用向量、20=无可用会话模型。
+> 2026-10-15 实测：`qwen-plus-latest` 与三个 `text-embedding-*` 均因免费额度耗尽不可用，
+> 而其他 7 个会话模型各剩百万级 tokens —— 所以遇到 `/health=degraded` 先探测，别凭印象改配置。
+>
+> **向量侧无额度/无外网时**：`.env` 设 `EMBEDDING_PROVIDER=local`（本地 BGE，需
+> `pip install -r requirements-optional.txt`），此时 `/health` 的 `embedding` 不依赖任何 Key；
+> 国内下载模型先设 `$env:HF_ENDPOINT='https://hf-mirror.com'`，否则 huggingface.co 会超时。
 
 或在 Streamlit 侧边栏点「▶️ 运行评测并生成报告」。
 
@@ -188,8 +207,8 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 
 ### 测试与覆盖率
 - **一键运行**：`pip install -r requirements-dev.txt` 后直接 `pytest`（`pyproject.toml` 中已配好 `testpaths` 与 `pythonpath`，不依赖调用方式）。
-- **用例规模**：**465 条**（pytest 实际收集数，含参数化展开；源码级 435 个用例函数），分散在 **40 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
-- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **91%**（4836 语句 / 漏 420；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
+- **用例规模**：**473 条**（pytest 实际收集数，含参数化展开；源码级 443 个用例函数），分散在 **40 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
+- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **92%**（4860 语句 / 漏 413；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
 - **测试文件清单**（40 个 `test_*.py`，按关注点分组）：
   - 路由 / 节点：`test_graph_route.py`（9 模式路由与端到端冒烟）、`test_nodes.py`（节点与分支，`nodes.py` 覆盖率 98%）、`test_model_routing.py`（强弱模型分级路由）
   - RAG 链路：`test_rag.py` / `test_loaders.py` / `test_rerank.py` / `test_retrieval_cache.py` / `test_embeddings.py` / `test_prompt_cache.py`
@@ -320,7 +339,7 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 - chunk_size / overlap 怎么定？标题感知切分的收益。
 - Function Calling 与显式检索两条路径的取舍（含实测：延迟 -56%、token 0.22x，见 §四）。
 - 评测集怎么来的（不是拍脑袋），指标口径如何固定。
-- 覆盖率 91% 是怎么达成的？哪些分支最难测（如 OTel 真实 tracer 路径需 SDK）？
+- 覆盖率 92% 是怎么达成的？哪些分支最难测（如 OTel 真实 tracer 路径需 SDK）？
 
 ---
 
@@ -335,7 +354,7 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
   - **JD 匹配评分卡**：关联「AI 应用工程师」岗位 + 简历后提问，返回 **73/100**，分项 技能 80 / 经验 70 / 学历 0 / 项目 80，命中项 3 条、缺口项 3 条、面试准备重点 3 条，前端渲染为环形总分 + 分项进度条 + 命中/缺口双栏。
   - **面试复盘分区卡片**：提交一段模拟面试记录后返回 **65/100**（技术深度 60 / 问题结构 70 / 证据支撑 60），归档后在「面试复盘」页渲染为 四段式卡片：表现评分（4 枚环形指标）、追问链还原（Q1–Q4 步骤条）、薄弱点（警示色左边框）、改进动作（可勾选清单）。
   - **工具调用时间线**：`job_search` 模式下模型自主调用 `search_web`，前端渲染折叠摘要「调用了 1 个工具 · 10.1s」，展开显示工具名（等宽）/ 序号与耗时 / 入参摘要 / 返回摘要；本次联网实际超时降级，时间线如实显示「联网检索无结果或暂不可用，请基于已有信息作答」。
-- 测试套件：**465 条用例、覆盖率 91%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
+- 测试套件：**473 条用例、覆盖率 92%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
 
 ### 已知问题 / 注意
 - **必须配置有效 Key**：对话与知识库建库分别依赖 `OPENAI_API_KEY` 与 `EMBEDDING_API_KEY`（Embedding 默认走硅基流动 `BAAI/bge-m3`）。未配置或无效时仅能演示路由/建库/检索流程，真实生成会降级。
@@ -347,7 +366,7 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
   2. **上游无修复版本**：`diskcache 5.6.3`（`PYSEC-2026-2447`，2 条）——只能等上游或换缓存实现。
   CI 的口径是「**只告警不阻断，但绝不静默**」：命中时打一条 `::warning` 注释，并把完整明细写进该步骤的 **Job Summary**（流水线页面直接可查）。升级后这个口径**不开倒车**：剩下 12 条都有书面理由，不许用「静默」把它变成 0。
 - **Windows / faiss**：若 `import faiss` 报 numpy 不兼容，执行 `pip install "numpy<2"`。
-- **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 91% 覆盖率的主要缺口所在。
+- **OpenTelemetry 真实链路需安装 SDK**：运行环境未装 `opentelemetry` SDK 时，`telemetry.py` 走 no-op 兜底（已覆盖）；启用真实 span 导出需 `pip install -r requirements-otel.txt` 并配置 `OTEL_EXPORTER_OTLP_ENDPOINT`——这是当前 92% 覆盖率的主要缺口所在。
 - 评测（`run_eval.py` 或界面「运行评测」）需要至少一个已建库的知识库，评测集会优先从知识库 chunk 反向生成。
 
 ---

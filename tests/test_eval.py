@@ -21,7 +21,7 @@ from src.eval import (
 from src.eval.dataset import _parse_qa, load_records, save_records
 from src.eval.metrics import _parse_claims, judge_hallucination
 from src.eval.report import render_report
-from src.models import EvalRecord
+from src.models import EvalRecord, MetricResult
 from src.rag.pipeline import RAGPipeline, RetrievalConfig
 
 
@@ -235,6 +235,95 @@ def test_build_offline_records_skips_short_chunks():
     )
     records = build_offline_records(pipeline)
     assert [r.golden_chunk_ids[0] for r in records] == ["c1"]
+
+
+def test_save_report_writes_to_out_path(tmp_path):
+    """给了 out_path 就要写到那里（含自动建父目录）—— 报告要能进版本库。
+
+    背景：报告原先只落 `Agent_output/`（已被 .gitignore），于是简历/面试里引用的
+    数字在仓库里翻不到对应报告，容易出现"数字漂移"。`--report-out` 就是为此而生。
+    """
+    from src.eval.report import save_report
+
+    target = tmp_path / "docs" / "RAG_EVAL_REPORT.md"
+    path = save_report([], None, k=5, out_path=target)
+
+    assert Path(path) == target
+    assert target.exists(), "报告文件应已生成"
+    assert target.read_text(encoding="utf-8").strip(), "报告内容不应为空"
+
+
+def test_save_report_default_keeps_agent_output(monkeypatch):
+    """不传 out_path 时必须**沿用**原来的 save_file(content, "Eval_Report")，零回归。"""
+    import src.eval.report as report_mod
+
+    seen: dict = {}
+
+    def _fake_save_file(content, prefix):
+        seen["content"] = content
+        seen["prefix"] = prefix
+        return "Agent_output/" + prefix + ".md"
+
+    monkeypatch.setattr(report_mod, "save_file", _fake_save_file)
+    path = report_mod.save_report([], None, k=5)
+
+    assert seen["prefix"] == "Eval_Report"
+    assert seen["content"], "内容仍应由 save_file 落盘"
+    assert path == "Agent_output/Eval_Report.md"
+
+
+def _metric(name: str, recall: float, mrr: float = 0.5, ms: float = 10.0):
+    """构造真实的 MetricResult（用替身容易漏字段，render_report 会读 config/sample_count）。"""
+    return MetricResult(
+        name=name,
+        recall_at_k=recall,
+        mrr=mrr,
+        hit_rate=recall,
+        avg_latency_ms=ms,
+        sample_count=20,
+    )
+
+
+def test_report_conclusion_is_honest_when_hybrid_ties_single():
+    """混合检索与最优单路持平（差 < 0.5 个百分点）时，结论不许写"确实互补"。
+
+    回归背景（2026-10-15）：小知识库（samples 只有 7 个片段）让 Recall 很快触顶，
+    实跑出现"混合 70.0% vs 仅 BM25 70.0%"，而模板仍输出
+    「说明关键词匹配与语义召回确实互补，混合检索值得作为默认配置」——
+    这把"没测出差异"包装成了"验证了收益"，是比没有结论更糟的误导。
+    """
+    from src.eval.report import render_report
+
+    text = render_report(
+        [
+            _metric("仅向量检索", 0.65),
+            _metric("仅 BM25", 0.70),
+            _metric("混合检索(RRF)", 0.70),
+            _metric("混合检索 + LLM重排", 0.70, mrr=0.65, ms=1000.0),
+        ],
+        None,
+        k=5,
+    )
+    assert "持平" in text
+    assert "确实互补" not in text
+
+
+def test_report_conclusion_flags_hybrid_regression():
+    """混合检索低于最优单路时，要如实说"反而低于"并给出排查方向，而不是继续夸互补。"""
+    from src.eval.report import render_report
+
+    text = render_report(
+        [
+            _metric("仅向量检索", 0.80),
+            _metric("仅 BM25", 0.75),
+            _metric("混合检索(RRF)", 0.60),
+            _metric("混合检索 + LLM重排", 0.60, mrr=0.6, ms=900.0),
+        ],
+        None,
+        k=5,
+    )
+    assert "反而低于最优单路" in text
+    assert "确实互补" not in text
 
 
 if __name__ == "__main__":
