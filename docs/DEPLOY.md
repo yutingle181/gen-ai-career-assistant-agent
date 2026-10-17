@@ -3,8 +3,9 @@
 > 首次部署请按下面的「验收清单」逐项确认，不要假设它开箱即用。
 > 部署过程中踩到的坑请追加到 `DEV_NOTES.md`。
 >
-> **2026-10-17 补充**：新增 §11「零成本上云（Hugging Face Spaces）」——
-> 不想买服务器也能真机部署 ✓✓，但有三个限制（sleep / 文件系统清空 / 单容器 ✓✗）必须先看清 ✓。
+> **2026-10-17 补充**：新增 §12「零成本真机验证（GitHub Codespaces + cloudflared）」——
+> 不想买服务器也能真机部署 ✓✓；§11 的 Hugging Face Spaces 经查证**需要 PRO 订阅** ✗✗
+> （免费档只能建 Static Space ✓✗），一并写明以免误导 ✓。
 
 # 部署指南（生产）
 
@@ -169,16 +170,35 @@ docker compose -f docker-compose.prod.yml up -d
 
 ---
 
-## 11. 零成本上云（Hugging Face Spaces）
+## 11. Hugging Face Spaces（**需要 PRO 订阅，非免费**）
 
-不想买服务器也能真机部署 ✓✓ —— HF Spaces 免费档 **2 核 16GB** ✓✓、有公网 URL ✓✓、
-且**直接吃我们的 Dockerfile**（docker SDK ✓✓）✓✓。
+> ⚠️ **2026-10-17 查证后更正**：本节原计划是「零成本上云」，但 HF 已改政策 ——
+> **免费档只能建 Static Space** ✓✗，**Gradio 与 Docker Space 都要 PRO（$9/月）** ✗✗。
+> 官方定价页把 "Host/Create Gradio & Docker Spaces" 明确列为 PRO / Team 能力 ✓。
+>
+> 所以：**不想付费就别走这条路** ✓✓ —— 改用 §12 的 Codespaces 演练 + cloudflared 临时链接 ✓✓
+> （两者都不花钱 ✓✓ 且 Codespaces 能完整验证 Docker 部署 ✓✓）。
+>
+> 本节保留是因为：① 已有 HF 账号的话升级 PRO 仍是最省事的公网部署 ✓✓；
+> ② `deploy/huggingface/` 下的文件与 `Dockerfile` 的 `PORT` 可覆盖设计**本身仍有用** ✓✓
+> （换任何要求固定端口的平台都用得上 ✓✓）。
+
+### 与自建服务器的差别（先看清再决定 ✓✓）
+
+| 维度 | 自建服务器 | HF Spaces（需 PRO ✓✗） |
+| --- | --- | --- |
+| 费用 | 按月付费 | **$9/月起** ✗✗ |
+| 多服务编排（api + redis + 数据卷） | ✅ `docker-compose.prod.yml` | ❌ **单容器** ✓✗ |
+| 数据持久化 | ✅ 命名卷 | ❌ **重启后文件系统清空** ✗✗ |
+| 常驻 | ✅ | ⚠️ **48h 无访问会 sleep** ✗✗ |
+| 端口 | 自定 | 平台约定 **7860** ✓ |
+| 密钥 | 服务器本地 `.env.prod` | Space 的 Secrets ✓✓ |
 
 ### 与自建服务器的差别（先看清再决定 ✓✓）
 
 | 维度 | 自建服务器 | HF Spaces |
 | --- | --- | --- |
-| 费用 | 按月付费 | **免费** ✓✓ |
+| 费用 | 按月付费 | **$9/月起（PRO）** ✗✗ |
 | 多服务编排（api + redis + 数据卷） | ✅ `docker-compose.prod.yml` | ❌ **单容器** ✓✗ |
 | 数据持久化 | ✅ 命名卷 | ❌ **重启后文件系统清空** ✗✗ |
 | 常驻 | ✅ | ⚠️ **48h 无访问会 sleep** ✗✗ |
@@ -248,3 +268,80 @@ curl -X POST https://<用户名>-<space名>.hf.space/knowledge/samples/ingest_di
 
 > 同样的原因，`HEALTHCHECK` 用的是 `CMD-SHELL` 而不是 exec 形式 ——
 > exec 形式不展开环境变量，硬编码 8000 会让 HF 上的探活永远失败 ✗✗。
+
+---
+
+## 12. 零成本真机验证（GitHub Codespaces + cloudflared）
+
+不想买服务器、也不想付 HF PRO ✓✓ —— 这条路**一分钱不花** ✓✓ 且能完整验证 Docker 部署 ✓✓。
+
+### 组合方式（两步互补 ✓✓）
+
+| 步骤 | 工具 | 验证什么 | 费用 |
+| --- | --- | --- | --- |
+| **A. 部署演练** | **GitHub Codespaces**（免费 **60 小时/月** ✓✓） | `Dockerfile` + `docker-compose.prod.yml` **真的能 build、能起、能探活** ✓✓ | 免费 ✓✓ |
+| **B. 临时公网 demo** | **cloudflared 穿透本机** | 给面试官一个**能点开的链接** ✓✓ | 免费 ✓✓ |
+
+> 为什么两个都要：Codespaces 能验证「**我们的部署产物是好的**」✓✓ 但它**不能常驻** ✓✗（停掉就没了 ✓✗）；
+> 本机穿透能常驻 ✓✓ 但验证的是「**我这台机器**」而不是「镜像」✓✗。合起来才闭环 ✓✓。
+
+### A. Codespaces 演练（推荐先做这个 ✓✓）
+
+```bash
+# 1. GitHub 仓库页面 → Code → Codespaces → Create codespace on <分支>
+#    （2 核 / 4GB / 约 30 秒启动 ✓✓）
+# 2. 进环境后直接跑（Codespaces 自带 Docker ✓✓）
+docker compose -f docker-compose.prod.yml up -d --build
+
+# 3. 逐条验收（与 §10 清单一致 ✓✓）
+curl -fsS http://127.0.0.1:8000/healthz && echo
+curl -fsS http://127.0.0.1:8000/health | head -c 400
+
+# 4. 验证完**停止** Codespaces ✓✓ —— 不停止会持续消耗免费额度 ✗✗
+```
+
+**验收要点** ✓✓（这些是 D 计划至今没验证过的部分 ✓✓）：
+
+- [ ] 镜像能 build 成功（哈希模式装依赖 ✓✓ 这步最容易暴露锁文件问题 ✗✗）
+- [ ] 容器内 `id -u` = **10001**（non-root ✓✓）
+- [ ] `/healthz` 返回 200 且**不调模型** ✓✓（看耗时 < 200ms ✓✓）
+- [ ] `docker compose restart api` 后服务自愈 ✓✓
+- [ ] Redis 容器起来后 `/health.runtime.task_state_backend` = `redis` ✓✓
+- [ ] 故意把 `.env.prod` 的模型 Key 改错 → 确认**不会**陷入重启循环 ✓✓
+
+> ⚠️ Codespaces 免费额度 **60 小时/月** ✓✓ —— 一次演练约 **1–1.5 小时** ✓✓
+> 够演练 40+ 次 ✓✓。**用完即停** ✓✓ 别让它空跑 ✗✗。
+
+### B. cloudflared 临时公网链接（面试当天用 ✓✓）
+
+```powershell
+# 1. 装 cloudflared（一次性 ✓✓）
+winget install --id Cloudflare.cloudflared
+
+# 2. 本机服务起好后（Agent :8000 已在跑 ✓✓），一条命令出公网链接 ✓✓
+cloudflared tunnel --url http://127.0.0.1:8000
+```
+输出里会有一个 `https://<随机名>.trycloudflare.com` ✓✓ —— **直接发给面试官** ✓✓。
+
+**特点与限制** ✓✓：
+
+| 项 | 说明 |
+| --- | --- |
+| 费用 | 免费 ✓✓ 无需注册 ✓✓ |
+| 链接有效期 | **进程断开即失效** ✗✗（面试时开着就行 ✓✓） |
+| HTTPS | 自动 ✓✓ |
+| 速度 | 取决于你家宽带上行 ✓✓（聊天场景够用 ✓✓） |
+| 安全 | ⚠️ **链接等于公开你的服务** ✗✗ —— 务必先设 `API_KEY` ✓✓ 否则谁都能烧你额度 ✗✗ |
+
+> 💡 想要固定域名 + 常驻 ✓✓ → 那还是得买服务器 ✓✓（见 §1–§10 ✓✓）或付 HF PRO ✓✗。
+
+### 为什么不用其他免费档 ✗✗
+
+| 方案 | 为什么不用 |
+| --- | --- |
+| ~~HF Spaces~~ | Docker Space 要 PRO（$9/月 ✗✗），免费档只剩 Static ✓✗ |
+| ~~Render~~ | 免费实例 **15 分钟不活动就 sleep** ✗✗ 且冷启动要 50s+ ✗ |
+| ~~Railway~~ | 只剩 $5 试用额度 ✗✗ 用完要付费 ✗ |
+| ~~Fly.io~~ | 2024 年起**取消免费档** ✗✗ |
+| ~~GCP Cloud Shell~~ | 会话 **60 分钟不活动即断** ✗✗ 不能常驻 ✓✗ |
+| **Oracle Always Free** | 4 核 24GB **永久免费**很香 ✓✓ 但注册要信用卡验证 ✗✗ 国内常卡人机验证 ✗✗ 时间成本太高 ✓✗ |
