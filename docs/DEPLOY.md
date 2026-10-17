@@ -2,6 +2,9 @@
 > 静态检查已过（compose 语法、ruff、518+ 条单测），但**未在真实服务器上执行过一次**。
 > 首次部署请按下面的「验收清单」逐项确认，不要假设它开箱即用。
 > 部署过程中踩到的坑请追加到 `DEV_NOTES.md`。
+>
+> **2026-10-17 补充**：新增 §11「零成本上云（Hugging Face Spaces）」——
+> 不想买服务器也能真机部署 ✓✓，但有三个限制（sleep / 文件系统清空 / 单容器 ✓✗）必须先看清 ✓。
 
 # 部署指南（生产）
 
@@ -163,3 +166,85 @@ docker compose -f docker-compose.prod.yml up -d
 - [ ] 容器内 `id -u` 为 10001（non-root）
 - [ ] `docker compose restart api` 后 SSE 能正常收尾（无残留进程）
 - [ ] 故意写错一次 `.env.prod` 里的模型 Key → 确认容器**不会**陷入重启循环（探活不该被模型拖垮）
+
+---
+
+## 11. 零成本上云（Hugging Face Spaces）
+
+不想买服务器也能真机部署 ✓✓ —— HF Spaces 免费档 **2 核 16GB** ✓✓、有公网 URL ✓✓、
+且**直接吃我们的 Dockerfile**（docker SDK ✓✓）✓✓。
+
+### 与自建服务器的差别（先看清再决定 ✓✓）
+
+| 维度 | 自建服务器 | HF Spaces |
+| --- | --- | --- |
+| 费用 | 按月付费 | **免费** ✓✓ |
+| 多服务编排（api + redis + 数据卷） | ✅ `docker-compose.prod.yml` | ❌ **单容器** ✓✗ |
+| 数据持久化 | ✅ 命名卷 | ❌ **重启后文件系统清空** ✗✗ |
+| 常驻 | ✅ | ⚠️ **48h 无访问会 sleep** ✗✗ |
+| 端口 | 自定 | 平台约定 **7860** ✓ |
+| 密钥 | 服务器本地 `.env.prod` | Space 的 Secrets ✓✓ |
+
+### 三个必须知道的行为 ✗✗
+
+1. **48 小时无访问会 sleep** ✗✗ —— 首次访问等 **30–60 秒**冷启动 ✓✓。
+   **面试/演示当天提前几分钟点开 `/healthz`** ✓✓ 别现场干等 ✗✗。
+2. **容器文件系统重启后清空** ✗✗（除挂载的 Dataset ✓✓）
+   → 知识库索引每次冷启动后要重建 ✓✓；`samples` 库只 3 个文档 ✓✓ 约 10 秒 ✓✓ 可接受 ✓✓。
+3. **单容器** ✓✗ —— 这里验证的是**镜像本身** ✓✓；
+   多服务编排仍按 §1–§10 在服务器上做 ✓✓（两者互补 ✓✓ 不是替代 ✗✗）。
+
+### 部署步骤
+
+```powershell
+# 1. 先 DryRun，确认导出内容（会打印文件清单与总大小 ✓✓）
+powershell -ExecutionPolicy Bypass -File deploy\huggingface\push-to-hf.ps1 `
+    -HfRemote <你的HF用户名>/<space名> -DryRun
+
+# 2. 确认无误后真正推送（HF 会自动 build ✓✓）
+powershell -ExecutionPolicy Bypass -File deploy\huggingface\push-to-hf.ps1 `
+    -HfRemote <你的HF用户名>/<space名>
+```
+
+脚本做三件事 ✓：① 用 `git archive` 导出**已提交**内容 ✓✓（天然排除 `.venv` / `__pycache__` / 本地数据 ✓✓）；
+② 用 `deploy/huggingface/README.md` 覆盖根目录那份（HF 要求根目录有元数据 ✓✓）；
+③ 推到 HF remote ✓✓。
+
+### 配密钥（Space 页面 → Settings → Variables and secrets ✓）
+
+| Secret | 必填 | 说明 |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | **必填** ✗✗ | 缺了 `/chat` 全部降级 |
+| `OPENAI_BASE_URL` | 必填 | 默认 `https://api.deepseek.com` |
+| `MODEL_NAME` | 必填 | 默认 `deepseek-chat` |
+| `EMBEDDING_PROVIDER` | 选填 | `local` = 本地 BGE（**免 Key** ✓✓ 默认 ✓✓） |
+| `API_KEY` | **强烈建议** ✓✓ | 否则谁都能烧你的额度 ✗✗ |
+| `PORT` | 平台自动设 ✓ | 7860，**不用手动加** ✓✓ |
+
+> ⚠️ `EMBEDDING_PROVIDER=local` 时首次要下载 ~100MB 模型 ✓✓ 冷启动会慢一些 ✓✓。
+
+### 部署后验收
+
+```powershell
+# 1. Build 日志全绿（Space 页面 → Build 页 ✓）
+# 2. 先点开触发冷启动（别等面试时干等 ✗✗）
+curl https://<用户名>-<space名>.hf.space/healthz
+# 3. 深度诊断（会真调一次模型 ✓✗ 手动点开看 ✓✓）
+curl https://<用户名>-<space名>.hf.space/health
+# 4. 建知识库索引（冷启动后文件系统是空的 ✗✗）
+curl -X POST https://<用户名>-<space名>.hf.space/knowledge/samples/ingest_dir `
+     -H "X-API-Key: <你设的Key>" -H 'Content-Type: application/json' `
+     -d '{"directory":"data/knowledge/samples"}'
+```
+
+### 端口是怎么做到 8000/7860 共存的 ✓
+
+`Dockerfile` 里是 `ENV PORT=8000` + `CMD ["sh","-c","exec ... --port ${PORT}"]` ✓✓：
+
+- 本机 / compose / 自建服务器 → 默认 **8000** ✓✓ 行为零变化 ✓✓
+- HF Spaces → 平台注入 `PORT=7860` ✓✓ **不用改 Dockerfile** ✓✓
+- 用 `sh -c` + `exec` 而不是 exec 数组：数组形式不展开 `${PORT}` ✗；
+  `exec` 让 uvicorn 替换掉 sh 成为 PID 1 ✓✓ **SIGTERM 仍能直达** ✓✓（否则优雅退出失效 ✗✗）
+
+> 同样的原因，`HEALTHCHECK` 用的是 `CMD-SHELL` 而不是 exec 形式 ——
+> exec 形式不展开环境变量，硬编码 8000 会让 HF 上的探活永远失败 ✗✗。

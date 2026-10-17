@@ -211,6 +211,28 @@ nginx 模板见 `deploy/nginx.conf.example` ✓（SSE 不缓冲 ✓、透传 `X-
 > 静态检查已过（compose YAML 语法 ✓、ruff ✓、单测 ✓），但**未在真实服务器上跑过一次** ✓。
 > 首次部署请按 `DEPLOY.md` 末尾的验收清单逐项确认 ✓。
 
+
+### 8. 零成本上云（Hugging Face Spaces，不想买服务器时用）
+
+免费档 **2 核 16GB** ✓✓、有公网 URL ✓✓、**直接吃我们的 Dockerfile** ✓✓。
+
+```powershell
+# 先 DryRun 看导出内容（不推送 ✓✓）
+powershell -ExecutionPolicy Bypass -File deploy\huggingface\push-to-hf.ps1 `
+    -HfRemote <你的HF用户名>/<space名> -DryRun
+
+# 确认后推送（HF 自动 build ✓✓）
+powershell -ExecutionPolicy Bypass -File deploy\huggingface\push-to-hf.ps1 `
+    -HfRemote <你的HF用户名>/<space名>
+```
+
+端口怎么共存 ✓✓：`Dockerfile` 用 `ENV PORT=8000` + `CMD ["sh","-c","exec ... --port ${PORT}"]` ✓✓ ——
+本机/compose/自建服务器默认 8000 ✓✓，HF 注入 `PORT=7860` ✓✓ **不用改 Dockerfile** ✓✓。
+
+⚠️ **三个限制必须先看清** ✗✗：**48h 无访问会 sleep**（面试当天提前几分钟点开 `/healthz` ✓✓）、
+**重启后文件系统清空**（知识库索引要重建 ✓✓）、**单容器**（多服务编排仍按 §7 在服务器上做 ✓✓）。
+完整说明见 **[`docs/DEPLOY.md`](docs/DEPLOY.md) §11** ✓✓。
+
 ---
 
 ## 三、知识库 RAG 链路

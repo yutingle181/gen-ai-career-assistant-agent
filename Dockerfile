@@ -56,14 +56,23 @@ USER appuser
 
 EXPOSE 8000 8501
 
+# 监听端口做成可覆盖：默认 8000（本机 / compose / 生产一致），
+# 部署到 Hugging Face Spaces 时设 PORT=7860（平台约定）即可，**不用改 Dockerfile** ✓✓。
+# 注意不能简单写成 CMD [... , "--port", "8000"] 硬编码 —— 那样 HF 上会起不来 ✗。
+ENV PORT=8000
+
 # 容器级探活（compose 里也会定义一份，这里让裸 docker run 也有）。
 # 用 /healthz 而不是 /health：/health 会真实调一次 LLM + Embedding，
 # 每 30 秒烧一次 token，且模型超时会直接判定容器不健康 → 被反复重启，越探测越坏。
+# 用 CMD-SHELL 而不是 exec 形式：exec 形式不展开环境变量，
+# 而 HF Spaces 的端口是 7860（由 PORT 决定），硬编码 8000 会让探活永远失败 ✗。
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=5); print('ok')"]
+    CMD-SHELL python -c "import os,urllib.request; urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8000')+'/healthz', timeout=5); print('ok')" || exit 1
 
 # SIGTERM 后给 30 秒收尾（SSE 长连接与在途任务需要），compose 用 stop_grace_period 对齐
 STOPSIGNAL SIGTERM
 
-# 默认启动 API 服务；compose 中 web 服务用 command 覆盖
-CMD ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 默认启动 API 服务；compose 中 web 服务用 command 覆盖。
+# 用 sh -c + exec 而不是 exec 数组形式：数组形式不展开 ${PORT} ✗；
+# exec 让 uvicorn 替换掉 sh 成为 PID 1，**信号仍能直达** ✓（否则优雅退出失效 ✗✗）。
+CMD ["sh", "-c", "exec python -m uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT}"]
