@@ -16,3 +16,10 @@ sentence-transformers>=3.0
 # （重试同一轮仍不会重复执行工具），只是进程重启后无法从图状态续跑。
 # 装上之后 thread checkpoint 落 SQLite（默认 data/checkpoints.sqlite），重启也能续。
 langgraph-checkpoint-sqlite>=2.0
+
+# 可选依赖：跨进程共享「在途任务状态 + 取消信号 + 背压计数」（多副本部署必需）。
+# 不装也能跑：`src/tasks.py` 保持进程内实现，单副本部署行为完全不变；
+# 装上并在 .env 设 TASK_STATE_BACKEND=redis 后，取消请求打到任意副本都生效
+# （否则另一个副本会返回 not_found，取消静默失败）。
+# 注意：redis-py 的 async 客户端是 redis.asyncio，本仓库用它与 FastAPI 的 async 路由配合。
+redis>=5.0

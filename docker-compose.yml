@@ -29,9 +29,11 @@ services:
       # 产物目录映射到宿主机，方便直接查看与取用
       - ./Agent_output:/app/Agent_output
     restart: unless-stopped
+    stop_grace_period: 30s   # SSE 长连接 + 在途任务：给优雅退出发出的 SIGTERM 留出收尾时间
     healthcheck:
-      # 探活走 GET /（不含 LLM 探测，开销低）；/health 会真实探测模型，不适合做高频探活
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=5); print('ok')"]
+      # 探活走 GET /healthz（零外部依赖）；**不要用 /health** —— 它会真实调一次 LLM+Embedding，
+      # 每 30 秒烧一次 token，且 LLM 超时会直接让探活失败 → 容器被反复重启，越探测越坏。
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=5); print('ok')"]
       interval: 30s
       timeout: 10s
       retries: 3

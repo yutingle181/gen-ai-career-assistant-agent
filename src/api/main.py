@@ -62,7 +62,25 @@ async def lifespan(app: FastAPI):
     logger.info(
         "API 启动 | model=%s | embedding=%s", config.MODEL_NAME, config.EMBEDDING_PROVIDER
     )
+    # 公网暴露风险自查：默认配置适合本地，但直接挂到公网等于把模型额度裸奔出去。
+    # 启动时说清，比账单出来才发现强（2026-10-16 上云准备时补的）。
+    if not config.auth_enabled():
+        logger.warning(
+            "API_KEY 未设置：业务接口当前**无需鉴权**即可调用。"
+            "本地开发这样最省事，但若把服务暴露到公网，任何人都能消耗你的模型额度。"
+        )
+    for risk in config.public_exposure_risks():
+        logger.warning("公网暴露风险：%s", risk)
     yield
+    # ---- 优雅退出的收尾位置（目前只记日志，真正的清理见下方注释）----
+    # 为什么不关 SQLite / 不停在途任务：
+    #   - SQLite 由 SQLAlchemy 引擎持有，进程退出即释放；显式关闭意义不大，
+    #     而在 lifespan 里抛异常会掩盖真正的退出原因；
+    #   - 在途任务是「请求正在进行」，容器滚动更新时被 SIGTERM 打断属于正常运维，
+    #     uvicorn 会先停止接收新请求、等已有请求收尾；我们要做的是**别把在途任务
+    #     留成静默烧 token 的孤儿**（这由 Redis 共享状态 + TTL 兜底，见 tasks_store）。
+    # 所以这里只打一行日志，让"重启发生过"在日志里可查。
+    logger.info("API 正在退出（优雅关闭已启动）")
 
 
 def create_app() -> FastAPI:
@@ -86,7 +104,11 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        # 显式白名单（config.CORS_ORIGINS），不再用通配符：
+        # `allow_origins=["*"]` 与 `allow_credentials=True` 是**非法组合**，
+        # 浏览器会直接拒掉这类响应——也就是说原来那个配置在跨域场景下根本不生效，
+        # 属于"看起来配了、实际没用"的假配置（2026-10-16 修正）。
+        allow_origins=config.CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -103,12 +125,13 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.router, dependencies=[Depends(verify_api_key)])
     app.include_router(sessions.router, dependencies=[Depends(verify_api_key)])
 
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def root():
         return {
             "name": "GenAI Career Assistant API",
             "docs": "/docs",
             "health": "/health",
+            "healthz": "/healthz",
             "endpoints": [
                 "POST /chat",
                 "POST /chat/stream (SSE)",
@@ -121,6 +144,22 @@ def create_app() -> FastAPI:
                 "GET  /sessions/cost/summary",
             ],
         }
+
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz():
+        """轻量探活（liveness/readiness）：**零外部依赖**。
+
+        为什么必须有一个和 `/health` 分开的端点（2026-10-16 上云准备时发现）：
+        - `/health` 会**真实调用一次 LLM 与一次 Embedding**（`check_llm_health`），
+          拿它做 compose / nginx / k8s 的健康检查，等于每 30 秒烧一次 token，
+          而且 LLM 超时会让探活失败 → 容器被反复重启，**越探测越坏**；
+        - 它还需要 Key 才判得出"未配置"，无 Key 时仍返回 200 + degraded，
+          探活根本区分不出"活着"和"不可用"。
+
+        所以这里只返回静态信息：能返回 200 就说明进程活着、路由已注册、事件循环没卡死。
+        要诊断模型/向量/索引，请用 `/health`（人工点开或低频调用）。
+        """
+        return {"status": "ok", "version": __version__}
 
     return app
 

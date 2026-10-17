@@ -1,0 +1,28 @@
+# 行尾规范：不同类型的文件在不同平台上跑，行尾错了会直接跑不起来
+#
+# 2026-10-16 实测踩到：在 Windows 上提交 `scripts/deploy/remote_deploy.sh` 时，
+# git 警告「LF will be replaced by CRLF」——那个脚本要到 Linux 服务器上执行，
+# 带 CRLF 的 shebang 会报 `bad interpreter: /usr/bin/env bash^M`，部署直接失败。
+# 根因是仓库没有 .gitattributes，core.autocrlf 的行为就取决于每台机器的配置。
+
+# 默认按文本处理，行尾保持 LF（容器、Linux 服务器、Python 源码都用 LF）
+* text=auto eol=lf
+
+# Windows 专用：PowerShell / bat 必须是 CRLF，否则在 Windows 上可能出问题
+*.ps1 text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 明确要 LF 的：shell 脚本、CI 配置、nginx 模板
+*.sh        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.conf      text eol=lf
+*.example   text eol=lf
+
+# 二进制不做行尾转换
+*.png  binary
+*.pdf  binary
+*.faiss binary
+*.sqlite binary
+*.pkl binary

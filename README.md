@@ -106,7 +106,51 @@ python run_eval.py --report-out docs/RAG_EVAL_REPORT.md
 > `--no-judge` 跳过幻觉判定（省约 75% 调用）；`--workers 8` 提高按样本并发（默认 `EVAL_MAX_WORKERS=4`）。
 > 幻觉率默认只在基线上判定一次并由各组复用（它衡量知识库内容能否支撑结论，与排序方式无关）。
 
-### 5. Docker 容器化启动（推荐部署方式）
+### 5. 跑压测（阶梯并发，产出可复现的 P95）
+
+```powershell
+# 依赖（属开发工具，故意不进 requirements —— 否则 CI 每次都要装绘图库）
+.venv-ci\Scripts\python.exe -m pip install locust matplotlib
+
+# 起被压服务（换个端口避开日常用的 8000）
+.venv-ci\Scripts\python.exe -m uvicorn src.api.main:app --port 8018
+
+# 临时把 .env 的 API_RATE_LIMIT 改成 0 并重启服务（原因见下）
+
+# 跑阶梯压测（2 场景 × 3 档 × 20s ≈ 2.5 分钟）+ 画曲线
+powershell -NoProfile -ExecutionPolicy Bypass -File bench\run_bench.ps1 -BaseUrl http://127.0.0.1:8018
+.venv-ci\Scripts\python.exe bench\plot_bench.py --results-dir bench\results
+```
+
+2026-10-16 实测（i7-12650H / Python 3.12.3 / locust 2.46.7 / 单进程 / 限流已关 ✓）：
+
+| 场景 | 并发 | P50 | P95 | P99 | 吞吐 | 失败 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `GET /`（框架基线） | 10 | 5ms | 9ms | 10ms | 292/s | 0% |
+| `GET /` | 50 | 26ms | 120ms | 160ms | 812/s | 0% |
+| `POST /knowledge/samples/search` | 1 | **100ms** | 170ms | 170ms | 1.0/s | 0% |
+| 同上 | 10 | 170ms | 530ms | 570ms | 8.1/s | 0% |
+| 同上 | 50 | **3.2s** | 4.4s | 6.7s | **11.9/s** | 0% |
+
+三条可直接拿去讲的结论 ✓：
+
+- **框架不是瓶颈** ✓ —— `GET /` 吞吐随并发近线性涨到 812 req/s ✓；
+- **瓶颈是检索链路** ✓ —— 1 并发就要 100ms ✓（本地 embedding + BM25 + RRF + rerank 全链路 ✓）✓；
+- **50 并发已进排队区** ✓ —— 吞吐只涨 47%（8.1→11.9 ✓）而并发涨 5 倍 ✓，
+  Little's Law 校验：11.9 × 3.2s ≈ **38 个请求在排队** ✓ ✓。
+
+压测有两个**必须先处理**的前提，否则数字全错 ✓：
+
+1. **先关限流** ✓ —— 默认 `API_RATE_LIMIT=60`/IP/分钟 ✓，
+   而每档只压 20 秒、全部落在同一窗口内 ✓ → 实测第一版 **195 个请求全是 429** ✓。
+   顺带这也说明：**默认配置下单 IP 上限约 1 req/s** ✓，比系统拐点早得多 ✓ ✓。
+   （注意 `load_dotenv(override=True)` ⇒ `.env` 会覆盖进程环境变量 ✓，`$env:API_RATE_LIMIT=0` **无效** ✓ ✗）
+2. **必须预热** ✓ —— 实测**首次检索 41.9 秒** ✓（要加载本地 BGE + faiss ✓），第二次起 ~100ms ✓。
+   不预热测到的是「模型加载有多慢」✗ 而非系统性能 ✓。
+
+完整口径、原始 CSV、曲线图与踩坑记录见 **[`docs/BENCHMARK.md`](docs/BENCHMARK.md)** ✓ ✓。
+
+### 6. Docker 容器化启动（推荐部署方式）
 
 镜像为 CPU 版（`python:3.12-slim`，无 GPU、无 torch），同时编排 **API（:8000）** 与 **Web（:8501）** 两个服务，密钥经 `env_file` 注入、数据经 volume 持久化，**不写进镜像**。
 
@@ -135,6 +179,37 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
   > Linux 宿主机若 `Agent_output` 写入报权限错误，执行一次 `sudo chown -R 10001:10001 Agent_output`。
 
 > 更多配置见仓库根目录 `Dockerfile` 与 `docker-compose.yml`。
+
+### 7. 上云部署（服务器 + CI 自动发布）
+
+生产用**另一个编排文件** `docker-compose.prod.yml`：容器只绑 `127.0.0.1`（对外交给 nginx / 安全组）、
+自带 Redis（任务状态跨副本共享）、SSE 有 `stop_grace_period` 收尾时间。
+
+| 环节 | 做法 |
+| --- | --- |
+| 镜像怎么送 | **服务器上 `git pull` + `docker compose build`** —— 零凭据、不注册任何镜像仓库；镜像 tag 用 commit sha，线上跑哪次构建一眼可查 |
+| 谁触发 | `.github/workflows/deploy.yml`：推 `master` 且命中 `src/**`、`Dockerfile`、`requirements*.txt`、`docker-compose.prod.yml`、`scripts/deploy/**` 时，SSH 到服务器执行 `scripts/deploy/remote_deploy.sh` |
+| 部署脚本 | 先 `build` 成功才 `up -d`（build 失败则旧容器继续跑 ✓）、`git pull --ff-only`（不在生产机生成 merge ✓）、部署后探活 `/healthz`，失败即流水线红 ✓ |
+| 回滚 | `cat .deploy-state` 拿到上次成功部署的 commit → `git checkout` → 重新 `up -d` |
+| 探活端点 | **`/healthz`（零外部依赖）**，不是 `/health` |
+| 密钥 | 只落服务器本地 `.env.prod`（已 gitignore ✓），不进镜像、不进仓库 |
+
+> ⚠️ **`/health` 不能做探活**：它会真实调一次 LLM + Embedding —— 每 30 秒烧一次 token，
+> 且模型超时会被判定为"容器不健康"从而反复重启，**越探测越坏** ✓。`/healthz` 只回静态信息 ✓，
+> 返回 200 就说明进程活着、事件循环没卡死 ✓。要诊断模型 / 向量 / 索引请用 `/health`。
+
+**公网上线前必做**（`/health` 的 `runtime.public_exposure_risks` 会明确列出还差哪几项 ✓）：
+
+- `API_KEY` 必须设 —— 默认留空 = 任何人可调用 `/chat` 消耗你的额度 ✓
+- `CORS_ORIGINS` 填你的前端来源 —— `*` 与 `allow_credentials` 是**非法组合** ✓，浏览器会直接拒 ✓
+- `API_RATE_LIMIT` 保持开启 ✓
+
+完整步骤（服务器前置 / 首次部署 / 建索引 / nginx / 备份恢复 / 排障速查 / 验收清单）见 **[`docs/DEPLOY.md`](docs/DEPLOY.md)** ✓，
+nginx 模板见 `deploy/nginx.conf.example` ✓（SSE 不缓冲 ✓、透传 `X-Forwarded-For` ✓、WebSocket 透传 ✓ —— 三处配错都会表现成"转圈很久" ✓）。
+
+> **验证状态**：上述 compose / 脚本 / CI / 文档在**没有服务器**的前提下写就绪，
+> 静态检查已过（compose YAML 语法 ✓、ruff ✓、单测 ✓），但**未在真实服务器上跑过一次** ✓。
+> 首次部署请按 `DEPLOY.md` 末尾的验收清单逐项确认 ✓。
 
 ---
 
@@ -207,9 +282,9 @@ docker compose down         # 默认保留 ./data 卷；加 -v 可一并清理�
 
 ### 测试与覆盖率
 - **一键运行**：`pip install -r requirements-dev.txt` 后直接 `pytest`（`pyproject.toml` 中已配好 `testpaths` 与 `pythonpath`，不依赖调用方式）。
-- **用例规模**：**473 条**（pytest 实际收集数，含参数化展开；源码级 443 个用例函数），分散在 **40 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
-- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **92%**（4860 语句 / 漏 413；`src/tasks.py`、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
-- **测试文件清单**（40 个 `test_*.py`，按关注点分组）：
+- **用例规模**：**526 条**（pytest 实际收集数，含参数化展开；源码级 495 个用例函数），分散在 **42 个 `test_*.py`**（另有整体冒烟 `smoke_test.py`），全部离线可跑——RAG / 评测用确定性伪 Embedding，接口用例在无 Key 时走降级路径，工具调用用伪工具 + 伪模型，MCP 用**真实协议**的最小假服务端（子进程），因此 CI 无需任何 API Key。
+- **覆盖率**：`pytest --cov=src --cov-report=term-missing` 当前 **92%**（5242 语句 / 漏 427；`src/tasks.py` 99%、`src/tasks_store.py` 98%、`src/safety.py`、`src/state.py`、`src/eval/runner.py` 达 **100%**），CI 以 `--cov-fail-under=75` 作为门禁。
+  **测试文件清单**（42 个 `test_*.py`，按关注点分组）：
   - 路由 / 节点：`test_graph_route.py`（9 模式路由与端到端冒烟）、`test_nodes.py`（节点与分支，`nodes.py` 覆盖率 98%）、`test_model_routing.py`（强弱模型分级路由）
   - RAG 链路：`test_rag.py` / `test_loaders.py` / `test_rerank.py` / `test_retrieval_cache.py` / `test_embeddings.py` / `test_prompt_cache.py`
   - 工具与**失败路径**：`test_tools.py` / `test_tool_retry.py`（超时 + 失败分级 + 重试）/ `test_circuit_breaker.py`（熔断）/ **`test_fault_injection.py`**（故障注入：注入序列可复现、重试阶梯、熔断短路、统一检索契约、对照路径不再崩、CLI 契约）
@@ -281,6 +356,7 @@ src/
 ├── state.py / storage.py / session.py / tools.py / logging_setup.py / telemetry.py
 ├── metrics.py / model_routing.py / ui_style.py
 ├── faults.py / freshness.py / tasks.py     # 故障注入 / 数据时效 / 任务生命周期（排队与取消）
+├── tasks_store.py       # 任务状态存储：进程内（默认）/ Redis（多副本共享，含降级与恢复）
 ├── skills/         # registry.py：场景注册 / 版本与接口兼容校验 / 最小权限
 ├── prompts/        # 分类 few-shot、9 个人设、RAG 提示词
 ├── rag/            # loaders/clean/split/vectorstore/bm25/fuse/rerank/pipeline/registry
@@ -293,7 +369,7 @@ app.py              # Streamlit 入口
 run_web.ps1 / run_api.ps1 / run_eval.py
 docs/screenshots/   # 端到端验证截图（JD 评分卡 / 工具时间线 / 复盘卡片，含窄屏）
 docs/ENGINEERING_SUMMARY.md   # 工程总结（规模 / 架构 / 决策 / 缺陷清单 / 量化证据 / 边界）
-tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话 / 安全 / 缓存 / 工具 /
+tests/              # 41 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话 / 安全 / 缓存 / 工具 /
                     #   故障注入 / 数据时效 / 任务生命周期 / MCP / Skills / 双路径 A/B / 流式一致性 …）
 .github/workflows/ci.yml   # CI 门禁（ruff lint / 跨版本 test 矩阵 / 锁文件校验 / 依赖漏洞扫描）
 ```
@@ -354,7 +430,7 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
   - **JD 匹配评分卡**：关联「AI 应用工程师」岗位 + 简历后提问，返回 **73/100**，分项 技能 80 / 经验 70 / 学历 0 / 项目 80，命中项 3 条、缺口项 3 条、面试准备重点 3 条，前端渲染为环形总分 + 分项进度条 + 命中/缺口双栏。
   - **面试复盘分区卡片**：提交一段模拟面试记录后返回 **65/100**（技术深度 60 / 问题结构 70 / 证据支撑 60），归档后在「面试复盘」页渲染为 四段式卡片：表现评分（4 枚环形指标）、追问链还原（Q1–Q4 步骤条）、薄弱点（警示色左边框）、改进动作（可勾选清单）。
   - **工具调用时间线**：`job_search` 模式下模型自主调用 `search_web`，前端渲染折叠摘要「调用了 1 个工具 · 10.1s」，展开显示工具名（等宽）/ 序号与耗时 / 入参摘要 / 返回摘要；本次联网实际超时降级，时间线如实显示「联网检索无结果或暂不可用，请基于已有信息作答」。
-- 测试套件：**473 条用例、覆盖率 92%、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
+- 测试套件：**526 条用例、覆盖率 92%（5242 语句 / 漏 427）、`ruff check` 0 违规**，CI 矩阵（3.10/3.11/3.12）全绿。
 
 ### 已知问题 / 注意
 - **必须配置有效 Key**：对话与知识库建库分别依赖 `OPENAI_API_KEY` 与 `EMBEDDING_API_KEY`（Embedding 默认走硅基流动 `BAAI/bge-m3`）。未配置或无效时仅能演示路由/建库/检索流程，真实生成会降级。
@@ -375,7 +451,74 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 
 版本号唯一来源：`src/__init__.py::__version__`（FastAPI 的 `openapi.info.version` 直接引用它，避免两处漂移）。
 
-### v1.6.0（当前）依赖升级与供应链收敛（LangChain / LangGraph 跨大版本）
+### v1.7.0（当前）在途任务状态跨进程共享（多副本下取消不再静默失败）
+
+**真实问题**：此前取消信号与在途状态都只在**进程内**（v1.3.0 起就是明说的边界）。
+单副本没问题，一旦多副本部署就会踩到两个静默失效：
+
+1. `POST /chat/cancel` 打到**另一个副本** → 那里没有本地句柄 → 返回 `status=not_found`，
+   用户以为停了，后台照跑、**token 照烧**；
+2. 背压 `API_MAX_QUEUE` 与 `/health` 的在途任务数只数**本副本** → 多副本下实际并发是 N 倍。
+
+**实现（`src/tasks_store.py`，默认仍是进程内，行为零回归）**
+
+| 能力 | Redis 模式 | 进程内（默认） |
+| --- | --- | --- |
+| 在途状态 | Hash `agent:task:{session_id}`（带 TTL，终态自然清理） | 带锁字典 |
+| 取消信号 | **三保险**：① 写共享 `cancel_reason` 状态位 ② Pub/Sub 广播（在线副本立即响应）③ `should_stop()` 节流兜底轮询 | 本地 `threading.Event` |
+| 背压 / 统计 | 由状态**派生**（扫在途键按 status 汇总），跨副本可见 | 同一份派生逻辑 |
+
+**开启方式**（需 `pip install -r requirements-optional.txt`，不装也能跑）：
+
+```dotenv
+TASK_STATE_BACKEND=redis
+TASK_STATE_REDIS_URL=redis://127.0.0.1:6379/0
+TASK_STATE_TTL_SECONDS=3600
+```
+
+**四个刻意的取舍**
+
+1. **取消必须三保险，不能只靠 Pub/Sub** —— 发布订阅**不保证送达**（订阅者不在线时消息直接丢）。
+   只靠广播会漏取消；只靠轮询要等到下一个检查点才生效。状态位保证不丢，广播保证不慢，轮询兜底。
+2. **计数由状态派生，不维护独立计数器** —— 直觉写法是「排队 +1、结束 −1」，但异常路径一旦漏减，
+   计数虚增会最终把服务**永久**堵死；派生计数天然不漂移。代价是 O(在途任务数)，
+   任务量上千再换 Lua 计数器。
+3. **降级不是"静默变没"** —— Redis 启用但连不上 → 启动即回退进程内并告警，运行中故障 → 当次操作转交进程内、
+   同一故障只告警一次，恢复后自动切回并明确告知；当前后端见 `/health.runtime.task_state_backend`。
+4. **共享状态不落对话内容** —— 字段与原有 `snapshot()` 同口径（session_id / run_id / status / 时间戳 / 取消原因）。
+
+**验证**：`tests/test_tasks_store.py` 用**假 Redis 客户端**覆盖全部读写路径与降级/恢复用例；
+其中「A 副本取消 → B 副本读到」这条用两个共享同一后端的 store 实例验证，
+而不是只断言"调用过 publish"（那证明不了跨进程真的看得见）。
+
+**真机验证（2026-10-16，本机 Redis 5.0.14 + 两个真实进程）**：
+
+| 验收项 | 结果 |
+| --- | --- |
+| 两个实例 `/health.runtime.task_state_backend` | 均为 `redis`（未降级） |
+| 向**另一个副本**发 `/chat/cancel` | `cancelled=true` + 共享状态写入 `cancel_reason=user` ✓ |
+| 反向取消（任务在 B、A 取消） | 同样生效 ✓ |
+| 背压计数 | 两个实例 `/health` 看到**同一个** total（跨副本可见 ✓） |
+| 正在跑的 SSE 流被跨副本取消 | 收到 `cancelled` 标记、流真正停下 ✓ |
+| store 层对着真 Redis 的 16 项命令验证 | 全通过 ✓ |
+
+复现（需要先起一个 Redis ✓）：
+
+```powershell
+# 启动（本机 Windows 版；--save "" 关掉 RDB，否则目录不可写时会触发
+# MISCONF「Redis 无法持久化」并把所有写命令禁掉）
+D:\env\redis\redis-server.exe D:\env\redis\redis.windows.conf --dir D:\env\redis --save ""
+
+# 验 store 层的每条命令（探活/读写/全局计数/取消位/TTL/脏数据容错）
+.venv-ci\Scripts\python.exe scripts\verify_task_state_redis.py
+```
+
+> 真机验证抓到的三个缺陷单测都没抓到（详见 `DEV_NOTES` #14 #15）：redis-py 8.x 默认发
+> `HELLO` 切 RESP3，而 Redis 5.x 不认（已用 `protocol=2` 锁 RESP2）；
+> `TaskStoreRouter` 漏了 `subscribe_cancel` 导致 `/health` 500；
+> 跨副本取消时 `status` 字段自相矛盾地报 `not_found`。
+
+### v1.6.0 依赖升级与供应链收敛（LangChain / LangGraph 跨大版本）
 
 **升级（代码零改动）**
 
@@ -439,7 +582,7 @@ tests/              # 40 个 test_*.py（路由 / 节点 / RAG / 评测 / 会话
 **质量**
 
 - 新增 **3 个测试文件 / 62 个用例**（故障注入 / 数据时效 / 任务生命周期），`tests/` 用例函数累计 **388 个**；其中包含「走真实检索层的 meta 透传」与「端到端取消关生成器」两类回归用例；`ruff check src tests` **0 违规**。
-- 如实说明的边界：故障注入是演示 / 评测开关、不接真实流量；新鲜度阈值（365 / 180 天）是策略参数；任务取消状态在进程内（多副本需换 Redis）、非流式 `/chat` 只有「开始前」检查点、取消后只写 DB 不进模型 history。
+- 如实说明的边界：故障注入是演示 / 评测开关、不接真实流量；新鲜度阈值（365 / 180 天）是策略参数；任务取消状态当时在进程内（**该限制已在 v1.7.0 解除**，见上文「在途任务状态跨进程共享」；默认仍为进程内，Redis 为可选增强）、非流式 `/chat` 只有「开始前」检查点、取消后只写 DB 不进模型 history。
 
 ### v1.2.0 生产级补强
 

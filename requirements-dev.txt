@@ -12,3 +12,8 @@ ruff>=0.16,<0.17     # 静态检查 / 导入排序（配置见 pyproject.toml）
 # 但开发/CI 环境必须装上——否则「进程挂掉后能否续跑」这条最关键的路径永远没有测试覆盖。
 # 用例见 tests/test_checkpoint_cross_process.py（未装该依赖时整体 skip）。
 langgraph-checkpoint-sqlite>=2.0
+
+# 跨进程任务状态（多副本取消/背压）：同样是「生产可选、开发/CI 必装」——
+# 不装时 src/tasks.py 走进程内实现，与单副本部署行为一致；
+# 但「取消打到另一个副本」这条路径没有测试覆盖，问题会一直潜伏到多副本上线才爆。
+redis>=5.0
