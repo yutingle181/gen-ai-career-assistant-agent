@@ -1,0 +1,79 @@
+name: Deploy
+
+# 触发条件刻意只圈"会影响运行镜像"的文件：
+# 改 docs/ 或 tests/ 不该触发一次服务器重建（每次重建要几分钟）。
+# 注意：**不要把这个 job 设成 required status check** —— 它跑在合并之后，
+# 一旦设成必需，任何 PR 只要改了 Dockerfile 就会因为要 SSH 到生产服务器而卡住。
+on:
+  push:
+    branches: [master]
+    paths:
+      - "src/**"
+      - "app.py"
+      - "Dockerfile"
+      - "requirements*.txt"
+      - "docker-compose.prod.yml"
+      - "scripts/deploy/**"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要部署的分支或 tag（默认 master）"
+        required: false
+        default: "master"
+
+# 同一时间只允许一次部署：并发部署会让两次 build/up 互相踩
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # environment 可以挂审批与保护规则；没有配置 environment 时这段仍然可用
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'master' }}
+
+      - name: 记录将要部署的 commit
+        run: echo "部署 ${{ github.sha }}（${{ github.ref }}）到 ${{ secrets.DEPLOY_HOST }}"
+
+      # 不在本机重复跑测试：同一个 commit 的 lint/test/lock-verify/audit 已在 CI 跑过，
+      # 这里再跑一遍只是浪费时间。真正要防的是"绕过 CI 直接推 master"——
+      # 那是分支保护该管的事（required checks），不是部署 job 的职责。
+      - name: 通过 SSH 在服务器上拉取并重建
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # 把"该跑什么"放在服务器仓库里（scripts/deploy/remote_deploy.sh），
+          # 而不是塞进 workflow 的 script 里：脚本能本地 dry-run、能改版本、能被 review。
+          script_path: scripts/deploy/remote_deploy.sh
+          env:
+            DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+            IMAGE_TAG: ${{ github.sha }}
+
+      - name: 部署后探活
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          # /healthz 是零外部依赖的探活端点；这里刻意不用 /health——
+          # 它会真调一次模型，超时会让"部署成功"被判成失败。
+          script: curl -fsS --max-time 10 http://127.0.0.1:8000/healthz && echo ' OK'
+
+      - name: 输出部署摘要
+        if: always()
+        run: |
+          {
+            echo "### 部署结果"
+            echo ""
+            echo "- commit: \`${{ github.sha }}\`"
+            echo "- 分支: ${{ github.event.inputs.ref || 'master' }}"
+            echo "- 结论: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

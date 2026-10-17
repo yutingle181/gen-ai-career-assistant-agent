@@ -203,6 +203,21 @@ API_MAX_QUEUE: int = _int("API_MAX_QUEUE", 8)
 # 单个请求最多排队等待多少秒；超时返回 503，让调用方拿到明确结论而不是一直等
 API_QUEUE_TIMEOUT: float = _float("API_QUEUE_TIMEOUT", 60.0)
 
+# ---------------------------------------------------------------- 任务状态后端（多副本）
+# 默认 memory：状态只在进程内，单副本部署行为与历史版本完全一致。
+# 设成 redis 后，「在途任务状态 + 取消信号 + 背压计数」改为跨进程共享：
+#   · 取消请求打到任意副本都能生效（否则另一个副本返回 not_found，取消静默失败）；
+#   · 背压按全局排队数判断（否则多副本下实际并发是 N 倍）；
+#   · /health 的 tasks 反映全局在途。
+# 关闭或连不上时自动回退进程内实现并告警（见 src/tasks_store.py 的 Router）。
+TASK_STATE_BACKEND: str = os.getenv("TASK_STATE_BACKEND", "memory").strip().lower()
+TASK_STATE_REDIS_URL: str = os.getenv("TASK_STATE_REDIS_URL", "redis://127.0.0.1:6379/0").strip()
+TASK_STATE_KEY_PREFIX: str = os.getenv("TASK_STATE_KEY_PREFIX", "agent:task:").strip()
+# 任务状态键的 TTL：终态任务靠它自然清理，避免 Redis 里堆历史（本轮不做历史持久化）
+TASK_STATE_TTL_SECONDS: int = _int("TASK_STATE_TTL_SECONDS", 3600)
+# 故障后按此间隔尝试恢复（秒）
+TASK_STATE_HEALTH_CHECK_SECONDS: int = _int("TASK_STATE_HEALTH_CHECK_SECONDS", 30)
+
 # ---------------------------------------------------------------- 故障注入（演示 / 评测用）
 # 默认关闭。打开后按概率给指定工具注入模拟故障，用来验证「失败分级 / 熔断 / Failure Onset」
 # 在真出问题时确实生效——这三块在 happy path 上永远是 0 失败，证明不了任何东西。
@@ -265,6 +280,43 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 API_KEY: str = os.getenv("API_KEY", "").strip()
 # 速率限制：每客户端 IP 每分钟请求上限；<=0 表示关闭限流。
 API_RATE_LIMIT: int = _int("API_RATE_LIMIT", 60)
+
+# 浏览器直连的来源白名单（逗号分隔）。公网部署必须显式列出自己的前端域名。
+# 默认只放行本机两个来源：Streamlit(8501) 与 jobseeker 前端(5173) 的常见写法。
+# 特别说明：原来的 allow_origins=["*"] + allow_credentials=True 在浏览器里是**非法组合**
+# （带凭据的跨域请求不允许通配来源），实际会被浏览器拒掉；改成显式白名单后才真正生效。
+CORS_ORIGINS: list[str] = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+] or [
+    "http://localhost:8501",
+    "http://127.0.0.1:8501",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+
+def auth_enabled() -> bool:
+    """业务接口是否要求 API Key。"""
+    return bool(API_KEY)
+
+
+def public_exposure_risks() -> list[str]:
+    """当前配置下"直接暴露到公网"的风险项（启动时与 /health 都会提示）。
+
+    单人本地项目默认是"不设 API Key、不限速、只在本机"，
+    这套默认值拿到公网上就是**裸奔**：任何人可以刷爆你的 LLM 额度。
+    与其等到账单出来才发现，不如启动时就明确说清哪几项需要改。
+    """
+    risks: list[str] = []
+    if not API_KEY:
+        risks.append("API_KEY 未设置 → 任何人都能调用 /chat，直接消耗你的模型额度")
+    if API_RATE_LIMIT <= 0:
+        risks.append("API_RATE_LIMIT<=0 → 限流已关闭，单 IP 可无限刷")
+    if "*" in CORS_ORIGINS:
+        risks.append("CORS_ORIGINS 含 * → 任意站点都能带凭据跨域调用")
+    return risks
 
 
 def mask_key(key: str) -> str:

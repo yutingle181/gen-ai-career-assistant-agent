@@ -353,12 +353,17 @@ async def chat_cancel(req: CancelRequest) -> dict:
     返回值语义要看清：`cancelled=true` 只代表**取消信号已发出**，
     线程会在下一个检查点才真正停下（流式分片之间 / 工具轮次之间），
     所以调用方不要据此立刻假设资源已释放、额度已停止消耗。
+
+    `status` 优先取本进程句柄；本地没有句柄时（例如任务跑在**另一个副本**上）
+    读共享状态 —— 否则会返回 `{"cancelled": true, "status": "not_found"}` 这种
+    自相矛盾的响应：取消其实已经在对方进程生效，调用方却被告知「没找到任务」。
     """
     ok = tasks.cancel(req.session_id, reason="user")
     handle = tasks.current(req.session_id)
+    status = handle.status if handle is not None else (tasks.shared_status(req.session_id) or "not_found")
     return {
         "cancelled": ok,
-        "status": handle.status if handle is not None else "not_found",
+        "status": status,
         "detail": (
             "取消信号已发出，将在下一个检查点停止"
             if ok

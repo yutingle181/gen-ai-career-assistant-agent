@@ -74,8 +74,17 @@ def augment(path: pathlib.Path) -> tuple[int, list[str]]:
             continue
         # 关键：必须用反斜杠续行（与 pip-compile --generate-hashes 的输出格式一致），
         # 否则 pip 会把每个 --hash 行当成"没有需求的行"而忽略掉。
+        #
+        # 但**不能重复加**：带环境标记的依赖，pip-compile 输出的那一行本身已经以 `\` 结尾
+        # （例如 `uvloop==0.22.1 ; sys_platform != "win32" \`）。再补一个就变成 `\ \`，
+        # pip 解析时在反斜杠处断裂：
+        #     ERROR: Invalid requirement: 'uvloop==0.22.1': Expected end of marker expression
+        # 2026-10-16 实测踩到：lock-verify 在 Linux CI 上因此挂掉，而 Windows 本机装得好好的
+        #（Windows 根本不会装 uvloop，所以本地永远看不出）。
         hashes = results[f"{m.group('name')}=={m.group('version')}"]
-        out.append(f"{line} \\")
+        stripped = line.rstrip()
+        already_continued = stripped.endswith("\\")
+        out.append(stripped if already_continued else f"{stripped} \\")
         for i, h in enumerate(hashes):
             suffix = " \\" if i < len(hashes) - 1 else ""
             out.append(f"    --hash=sha256:{h}{suffix}")

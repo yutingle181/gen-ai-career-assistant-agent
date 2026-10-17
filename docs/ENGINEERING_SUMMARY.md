@@ -17,11 +17,13 @@ FastAPI 服务，内置评测体系（Recall@5 / MRR / HitRate / 幻觉率 + 双
 | 维度 | 现值 |
 | --- | --- |
 | 服务代码 | `src/` **70 个 Python 文件**（最大三块：`tools.py` 27KB、`session.py` 22KB、`api/routers/chat.py` 19.6KB） |
-| 测试 | `tests/` **40 个 `test_*.py`** + `smoke_test.py`；**pytest 实际收集 473 条用例**（源码级 443 个用例函数） |
-| 覆盖率 | `pytest --cov=src` **92%**（4860 语句 / 漏 413）；`tasks.py` / `safety.py` / `state.py` / `eval/runner.py` 达 100% |
+| 测试 | `tests/` **42 个 `test_*.py`** + `smoke_test.py`；**pytest 实际收集 526 条用例**（源码级 495 个用例函数） |
+| 覆盖率 | `pytest --cov=src` **92%**（5242 语句 / 漏 427）；`tasks.py` 99% / `tasks_store.py` 98% / `safety.py` / `state.py` / `eval/runner.py` 达 100% |
+| 压测 | `bench/` + `docs/BENCHMARK.md`：locust 阶梯压测（1/10/50 并发 × 2 场景）自动出 P50/P95/P99 曲线与吞吐拐点。实测 i7-12650H 单进程：`GET /` 812 req/s（P99 160ms）而检索仅 11.9 req/s（50 并发 P50 3.2s）→ **瓶颈是检索链路而非框架**。两个前提：先关限流、必须预热（首次检索冷启动 41.9s） |
 | 入口 | `app.py`（Streamlit）、`run_eval.py`（评测 CLI）、`run_api.ps1` / `run_web.ps1`、Dockerfile + compose |
 | 运维脚本 | `probe_models.py`（模型 / 向量额度探测，只标准库、不打印密钥）、`scripts/rebuild_index_from_chunks.py`（换向量模型后从已存片段重建 faiss 索引） |
 | 评测基线 | `docs/RAG_EVAL_REPORT.md`（2026-10-15 实测：四组检索对照 + 工具双路径 A/B + 轨迹级指标；换模型/向量后必须重跑，否则数字不可比） |
+| 跨副本状态 | `src/tasks_store.py`：在途任务状态 / 取消信号 / 背压计数可跨进程共享（Redis 可选，默认进程内且零回归）。取消用**三保险**（状态位 + Pub/Sub + 兜底轮询），计数**由状态派生**（不会因漏减把服务永久堵死），后端见 `/health.runtime.task_state_backend` |
 | 依赖治理 | `requirements.lock.txt`（**101 包**）/ `requirements-dev.lock.txt`（**107 包**），钉全部传递依赖；2026-09-20 LangChain/LangGraph 跨大版本升级后重编（过程与证据见 `docs/DEP_UPGRADE_PLAN.md`） |
 | 业务面 | 9 个场景 · 5 组 API · 3 类消费方（Streamlit / jobseeker 前端 / API 调用方） |
 

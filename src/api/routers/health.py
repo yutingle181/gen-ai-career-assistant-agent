@@ -40,7 +40,16 @@ async def health():
             # 在途任务（排队 / 执行中）：背压与取消都必须能被看见，
             # 否则「为什么一直转圈」「点了停止到底停没停」只能靠猜。
             "tasks": tasks.snapshot(),
+            # 任务状态后端：memory=单进程（取消只在本副本生效）/ redis=跨副本共享。
+            # 降级是静默的（请求照常成功），不给这个字段就只能翻启动日志。
+            "task_state_backend": tasks.backend(),
             "api_max_queue": config.API_MAX_QUEUE,
+            # 公网暴露风险自查结果（2026-10-16 上云准备时加）：
+            # 默认配置适合本地开发，但直接暴露到公网等于把模型额度裸奔出去。
+            # 放在 /health 里是刻意的 —— 部署后先点一次这个端点，就能确认
+            # 「Key 设了没、限流开着没、CORS 收没收」，而不是等账单爆出来才发现。
+            "auth_enabled": config.auth_enabled(),
+            "public_exposure_risks": config.public_exposure_risks(),
             # MCP 外部工具状态（不含 command / env —— 那些可能含凭据）
             "mcp": mcp_snapshot(),
             # 技能注册表与授权：注册了哪些场景、各自什么版本、被授予了哪些权限

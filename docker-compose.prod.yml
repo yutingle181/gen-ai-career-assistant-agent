@@ -1,0 +1,105 @@
+# 生产编排（服务器上用这个；本机开发请继续用 docker-compose.yml）
+#
+# 与开发版 compose 的差别（每一处都有理由，不是"顺手改改"）：
+#   1. 端口只绑 127.0.0.1：容器不对公网开洞，统一由宿主机 nginx / 云厂商安全组决定谁能进来。
+#      开发版是 "8000:8000"（全网卡），本机无所谓，服务器上等于把裸服务暴露出去。
+#   2. 加 redis 服务：多副本下取消信号 / 在途状态 / 背压计数要跨进程共享（见 src/tasks_store.py）。
+#      不配 TASK_STATE_BACKEND=redis 也能跑，会自动降级为进程内并告警。
+#   3. stop_grace_period：SSE 长连接 + 在途任务需要时间收尾，默认 10 秒会被硬切。
+#   4. 知识库走 bind mount：镜像里**不含** data/（.dockerignore 排除 + Dockerfile 不 COPY），
+#      所以宿主机必须挂一个真实的知识库目录进来，否则线上 RAG 是空的、/knowledge 返回空列表。
+#   5. env_file 指向 .env.prod：密钥只落在服务器本地文件里，不进镜像、不进仓库。
+#
+# 用法（服务器上）：
+#   cp .env.example .env.prod && vi .env.prod     # 填模型 Key / API_KEY / CORS_ORIGINS
+#   mkdir -p data/knowledge data/index             # 挂载点，权限交给 10001:10001
+#   # 把知识库文档放进 data/knowledge/<kb>/，首次部署后建库：
+#   docker compose -f docker-compose.prod.yml exec api python -c "..."
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# 未验证声明（2026-10-16）：本文件在**没有服务器**的前提下写就绪并做了静态校验，
+# 但**未在真实服务器上跑过一次**。首次部署请按 docs/DEPLOY.md 的清单逐项确认。
+
+name: genai-career-assistant
+
+services:
+  api:
+    build: .
+    image: genai-career-assistant:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # 只绑本机：对外暴露交给 nginx / 安全组，避免绕过反代与 TLS
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env.prod
+    environment:
+      # 单副本跑时 TASK_STATE_BACKEND=redis 才有意义（进程内也能用，但不跨副本）
+      TASK_STATE_BACKEND: ${TASK_STATE_BACKEND:-redis}
+      TASK_STATE_REDIS_URL: ${TASK_STATE_REDIS_URL:-redis://redis:6379/0}
+      CHECKPOINT_DB_PATH: data/checkpoints.sqlite
+    volumes:
+      # app.db（成本统计）+ 索引 + 知识库文档：全部在数据卷里，容器重建不丢
+      - app_data:/app/data
+      - ./data/knowledge:/app/data/knowledge
+      - ./data/index:/app/data/index
+      - ./Agent_output:/app/Agent_output
+    depends_on:
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+    healthcheck:
+      # 只用 /healthz（零外部依赖）；/health 会真调模型，不能做高频探活
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=5); print('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  web:
+    build: .
+    image: genai-career-assistant:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8501:8501"
+    command: >-
+      python -m streamlit run app.py
+      --server.headless true
+      --server.address 0.0.0.0
+      --server.port 8501
+      --browser.gatherUsageStats false
+      --server.enableXsrfProtection true
+      --server.enableCORS false
+    env_file:
+      - .env.prod
+    volumes:
+      - app_data:/app/data
+      - ./data/knowledge:/app/data/knowledge
+      - ./data/index:/app/data/index
+      - ./Agent_output:/app/Agent_output
+    stop_grace_period: 20s
+
+  redis:
+    # 生产也需要关掉 RDB：dir 不可写时 stop-writes-on-bgsave-error 会把所有写命令禁掉
+    # （MISCONF），表现为"Redis 在跑但一律写失败"。
+    # 需要持久化就改成 appendonly yes 并确保 dir 可写。
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      # 要**写**一次才算可用：只 ping 会被只读副本/ACL 配错骗过去
+      test: ["CMD", "redis-cli", "set", "probe", "1", "ex", "10"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  app_data:
+  redis_data:

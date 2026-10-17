@@ -10,6 +10,9 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+# 压测原始产物（逐请求 CSV、locust HTML 报告、曲线图）—— 本机重跑即可复现，不入库。
+# 入库的是 docs/BENCHMARK.md 里的**结论**（表格 + 曲线 + 口径说明）。
+bench/results/
 .venv/
 .venv-ci/
 venv/
@@ -18,6 +21,12 @@ ENV/
 
 # Data / artifacts (local)
 *.db
+# sqlite 的 WAL / 共享内存伴随文件：WAL 模式必然产生这两个，默认 `*.db` 匹配不到它们
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+data/cache/
+data/ckpt-*.sqlite*
 *.sqlite3
 *.sqlite
 *.pkl
@@ -35,6 +44,12 @@ Thumbs.db
 
 # Env (keys must not be committed)
 .env
+# 生产密钥文件（模型 Key / API_KEY），绝不能进仓库。
+# 2026-10-16 上云准备时补：原本只有 .env 被忽略，.env.prod 会被 git add 进去，
+# 而它的内容与 .env 等价（模型 Key + API_KEY），一旦提交就是明文泄露。
+.env.prod
+# 部署状态文件（记录上一次成功部署的 commit，供回滚用）
+.deploy-state
 
 # 私人材料 / 含他人隐私的样例：只存本机、不入库（副本放在仓库外）
 INTERVIEW_NOTES.md

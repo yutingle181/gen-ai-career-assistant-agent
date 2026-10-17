@@ -16,6 +16,21 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from src import config, metrics, tasks
 from src.api.main import create_app
+from src.tasks_store import TaskStoreRouter
+from tests.test_tasks_store import FakeRedis, _ExplodingStore
+
+
+def _redis_router(monkeypatch) -> TaskStoreRouter:
+    """给当前测试装一个"共享后端的假 Redis"路由器（覆盖跨进程分支）。"""
+    client = FakeRedis()
+    router = TaskStoreRouter()
+    from src.tasks_store import RedisTaskStore
+
+    router._active = RedisTaskStore(
+        config.TASK_STATE_REDIS_URL, "agent:task:", 600, client=client
+    )
+    tasks._STORE = router
+    return router
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +39,10 @@ def _isolated(monkeypatch):
     metrics.reset()
     monkeypatch.setattr(config, "API_MAX_QUEUE", 8)
     monkeypatch.setattr(config, "API_QUEUE_TIMEOUT", 60.0)
+    # 钉住任务状态后端为 memory：`.env` 被 gitignore，CI 上没有这个文件，
+    # 而本机把 TASK_STATE_BACKEND 设成 redis 就会让"默认是进程内"的用例全红。
+    # 隐式依赖默认值的测试是脆弱的：前提必须由测试自己写出来（2026-10-16 实测踩到）。
+    monkeypatch.setattr(config, "TASK_STATE_BACKEND", "memory")
     yield
     tasks.reset()
     metrics.reset()
@@ -400,3 +419,140 @@ def test_stream_skips_generation_when_cancelled_before_start(client, monkeypatch
     assert r.status_code == 200
     assert produced["n"] == 0, "排队期间取消不应产生任何模型输出"
     assert '"type": "cancelled"' in body
+
+
+# ---------------------------------------------------------------- 跨副本取消（v1.7.0）
+def test_cancel_reaches_task_running_in_other_replica(monkeypatch):
+    """**改造前就是这条静默失败**：任务在别的副本上跑，本地没有句柄，
+    旧实现直接 return False（→ /chat/cancel 回 status=not_found，用户以为停了、token 照烧）。
+
+    新实现要能在共享状态里找到那个任务并写取消位。
+    """
+    router = _redis_router(monkeypatch)
+    router.save("sess-x", {"session_id": "sess-x", "status": "running"})
+
+    assert tasks.current("sess-x") is None, "本地确实没有句柄（它在另一个副本上）"
+    assert tasks.cancel("sess-x", "user") is True, "必须返回 True：取消信号已送达共享状态"
+    assert router.cancel_flag("sess-x") == "user"
+
+
+def test_cancel_returns_false_when_task_absent_everywhere(monkeypatch):
+    """共享状态里也查无此会话 → 老老实实返回 False（不能无中生有地"取消成功"）。"""
+    _redis_router(monkeypatch)
+    assert tasks.cancel("never-existed") is False
+
+
+def test_cancel_if_running_ignores_finished_task_in_shared_state(monkeypatch):
+    """断连兜底：任务已在共享状态里结束，就不该再标成取消（否则 /health 会撒谎）。"""
+    router = _redis_router(monkeypatch)
+    router.save("sess-done", {"session_id": "sess-done", "status": "done"})
+    assert tasks.cancel_if_running("sess-done", "client_gone") is False
+    assert router.cancel_flag("sess-done") is None
+
+
+def test_cancel_if_running_cross_replica(monkeypatch):
+    """跨副本的断连兜底：任务在别的副本上 running → 仍要能取消。"""
+    router = _redis_router(monkeypatch)
+    router.save("sess-r", {"session_id": "sess-r", "status": "running"})
+    assert tasks.cancel_if_running("sess-r", "client_gone") is True
+    assert router.cancel_flag("sess-r") == "client_gone"
+
+
+def test_backend_reports_current_store(monkeypatch):
+    """后端名可观察：降级是静默的，不给这个字段就只能翻早已滚过去的启动日志。"""
+    assert tasks.backend() == "memory"
+    _redis_router(monkeypatch)
+    assert tasks.backend() == "redis"
+
+
+def test_prune_clears_shared_state_too(monkeypatch):
+    """清理本地句柄时也要清共享状态，否则 Redis 里会留下终态任务直到 TTL 到期。"""
+    router = _redis_router(monkeypatch)
+    handle = tasks.register("sess-p")
+    handle.mark_running()
+    handle.finish(tasks.DONE)
+    assert tasks.prune() == 1
+    assert router.status_of("sess-p") is None
+
+
+def test_remote_cancel_sets_local_handle_immediately(monkeypatch):
+    """收到广播 → 本地句柄**立刻**置位（这正是三保险里"广播"那一路的作用：
+    不用等到下一个轮询节流窗口才停）。"""
+    _redis_router(monkeypatch)
+    handle = tasks.register("sess-b")
+    handle.mark_running()
+    assert handle.should_stop() is False
+
+    tasks._apply_remote_cancel("sess-b")
+
+    assert handle.should_stop() is True
+    assert handle.cancel_reason == "remote"
+    assert metrics.counter("task.cancel.remote") == 1
+
+
+def test_remote_cancel_ignores_unknown_or_finished_session(monkeypatch):
+    """广播一个本进程没有的（或已结束的）会话：静默忽略，不能抛给订阅线程。"""
+    _redis_router(monkeypatch)
+    tasks._apply_remote_cancel("never-heard-of-it")
+
+    handle = tasks.register("sess-c")
+    handle.finish(tasks.DONE)
+    tasks._apply_remote_cancel("sess-c")
+    assert handle.cancelled is False, "已结束的任务不该被重新标成取消"
+
+
+def test_store_subscribes_only_once(monkeypatch):
+    """首次用到存储时订阅一次即可：重复订阅会退化成同一进程收到多次广播。
+
+    这里刻意用**真实的 TaskStoreRouter**（只把后端换成假 Redis 客户端），
+    而不是自己写个替身：2026-10-16 真机验证时才发现路由器漏了 subscribe_cancel，
+    而当时的单测替身自带同名方法 → 替身与真实对象一起自洽，测试全绿、真机 /health 直接 500。
+    """
+    from src.tasks_store import RedisTaskStore
+
+    subscribed = []
+    real_router = TaskStoreRouter()
+    real_router._active = RedisTaskStore("redis://x/0", "agent:task:", 600, client=FakeRedis())
+    real_router.subscribe_cancel = lambda cb: subscribed.append(cb)
+
+    monkeypatch.setattr(tasks, "TaskStoreRouter", lambda: real_router)
+    tasks.reset_store()
+
+    tasks._store()
+    tasks._store()
+    assert len(subscribed) == 1
+    assert subscribed[0] is tasks._apply_remote_cancel
+
+
+def test_router_exposes_subscribe_cancel():
+    """路由器必须有 subscribe_cancel（tasks.py 是在路由器上发起订阅的）。
+
+    这是回归用例：漏掉它时，`/health` 会在真机上抛 AttributeError 直接 500。
+    """
+    assert callable(TaskStoreRouter().subscribe_cancel)
+
+
+def test_cancel_response_status_comes_from_shared_state_when_local_missing(monkeypatch):
+    """跨副本取消时 /chat/cancel 的 status 不能报 not_found。
+
+    回归背景（2026-10-16 真机验证发现）：任务跑在另一个副本上时，
+    响应是 `{"cancelled": true, "status": "not_found"}` —— 取消已经在对方进程生效了，
+    却告诉调用方「没找到任务」，正是这次改造要消灭的那类静默误导。
+    """
+    from src.api.routers.chat import chat_cancel
+    from src.api.schemas import CancelRequest
+
+    router = _redis_router(monkeypatch)
+    router.save("sess-remote", {"session_id": "sess-remote", "status": "running"})
+
+    resp = asyncio.run(chat_cancel(CancelRequest(session_id="sess-remote", reason="user")))
+
+    assert resp["cancelled"] is True
+    assert resp["status"] == "running", "本地没句柄时应读共享状态，而不是谎称 not_found"
+
+
+def test_shared_status_survives_backend_failure(monkeypatch):
+    """读共享状态失败时返回 None，不能把取消接口一起搞挂。"""
+    _redis_router(monkeypatch)
+    tasks._STORE._active = _ExplodingStore()
+    assert tasks.shared_status("sess-x") is None
