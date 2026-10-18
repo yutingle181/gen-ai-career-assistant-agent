@@ -56,14 +56,32 @@ USER appuser
 
 EXPOSE 8000 8501
 
+# 监听端口做成可覆盖：默认 8000（本机 / compose / 生产一致），
+# 部署到 Hugging Face Spaces 时设 PORT=7860（平台约定）即可，**不用改 Dockerfile** ✓✓。
+# 注意不能简单写成 CMD [... , "--port", "8000"] 硬编码 —— 那样 HF 上会起不来 ✗。
+ENV PORT=8000
+
 # 容器级探活（compose 里也会定义一份，这里让裸 docker run 也有）。
 # 用 /healthz 而不是 /health：/health 会真实调一次 LLM + Embedding，
 # 每 30 秒烧一次 token，且模型超时会直接判定容器不健康 → 被反复重启，越探测越坏。
+#
+# ⚠️ 为什么探活是独立脚本而不是写在 Dockerfile 里（2026-10-18 真机构建踩到 ✨✓）：
+#   Dockerfile 里**没有** `# syntax=docker/dockerfile:1` 这行时，`CMD-SHELL` 是**非法指令**，
+#   经典 builder 直接报
+#     Unknown type "CMD-SHELL" in HEALTHCHECK (try CMD)
+#   → 镜像构建失败 ✗✗
+#   而 exec 形式（CMD ["python","-c","..."])）不展开 ${PORT} ✨✓
+#   → HF Spaces 的 7860 端口探不到，探活永远失败 ✓✗
+#   用 sh -c 包一层虽能读环境变量，但引号要嵌四层（JSON + shell + Python + URL）✨✓ 极易错 ✓✗
+#   → 所以独立成 scripts/healthcheck.py：可读、可单测、Dockerfile 里就一行 ✓✓
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=5); print('ok')"]
+    CMD ["python", "/usr/local/bin/healthcheck.py"]
 
 # SIGTERM 后给 30 秒收尾（SSE 长连接与在途任务需要），compose 用 stop_grace_period 对齐
 STOPSIGNAL SIGTERM
 
-# 默认启动 API 服务；compose 中 web 服务用 command 覆盖
-CMD ["python", "-m", "uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# 默认启动 API 服务；compose 中 web 服务用 command 覆盖。
+# 用 sh -c + exec 而不是 exec 数组形式：数组形式不展开 ${PORT} ✗；
+# exec 让 uvicorn 替换掉 sh 成为 PID 1，**信号仍能直达** ✓（否则优雅退出失效 ✗✗）。
+CMD ["sh", "-c", "exec python -m uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT}"]

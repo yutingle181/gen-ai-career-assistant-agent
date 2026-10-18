@@ -211,6 +211,36 @@ nginx 模板见 `deploy/nginx.conf.example` ✓（SSE 不缓冲 ✓、透传 `X-
 > 静态检查已过（compose YAML 语法 ✓、ruff ✓、单测 ✓），但**未在真实服务器上跑过一次** ✓。
 > 首次部署请按 `DEPLOY.md` 末尾的验收清单逐项确认 ✓。
 
+
+### 8. 零成本真机验证（Codespaces + cloudflared，不想买服务器时用）
+
+**不花钱** ✓✓ 且能完整验证 Docker 部署 ✓✓：
+
+| 步骤 | 工具 | 验证什么 |
+| --- | --- | --- |
+| A. 部署演练 | **GitHub Codespaces**（免费 60h/月 ✓✓） | `Dockerfile` + `docker-compose.prod.yml` 真的能 build、能起、能探活 ✓✓ |
+| B. 临时公网 demo | **cloudflared 穿透本机** | 给面试官一个能点开的链接 ✓✓ |
+
+```powershell
+# A. GitHub 仓库 → Code → Codespaces → Create（自带 Docker ✓✓）
+docker compose -f docker-compose.prod.yml up -d --build
+curl -fsS http://127.0.0.1:8000/healthz        # 逐条验收
+# 用完**停止** Codespaces ✓✓ 否则持续消耗免费额度 ✗✗
+
+# B. 本机 Agent :8000 起好后 ✓✓
+winget install --id Cloudflare.cloudflared
+cloudflared tunnel --url http://127.0.0.1:8000   # 输出 https://xxx.trycloudflare.com ✓✓
+```
+
+端口怎么共存 ✓✓：`Dockerfile` 用 `ENV PORT=8000` + `CMD ["sh","-c","exec ... --port ${PORT}"]` ✓✓ ——
+本机/compose/自建服务器默认 8000 ✓✓，**换任何要求固定端口的平台都只改环境变量** ✓✓ 不用改 Dockerfile ✓✓。
+
+⚠️ **三个必须知道** ✓✓：Codespaces **不能常驻**（停掉就没 ✓✗）、cloudflared 链接**进程断开即失效** ✗✗、
+**链接等于公开服务** → 务必先设 `API_KEY` ✗✗。
+
+> ~~Hugging Face Spaces~~ ✗✗ 原计划用它，但 2026-10-17 查证发现 **Docker Space 需 PRO（$9/月）** ✗✗
+> 免费档只剩 Static ✓✗ —— 所以改走上面这条路 ✓✓。
+> 完整说明见 **[`docs/DEPLOY.md`](docs/DEPLOY.md) §12** ✓✓。
 ---
 
 ## 三、知识库 RAG 链路
