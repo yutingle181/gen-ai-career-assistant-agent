@@ -82,7 +82,13 @@ services:
     # 生产也需要关掉 RDB：dir 不可写时 stop-writes-on-bgsave-error 会把所有写命令禁掉
     # （MISCONF），表现为"Redis 在跑但一律写失败"。
     # 需要持久化就改成 appendonly yes 并确保 dir 可写。
-    image: redis:7-alpine
+    # 钉到 minor 版本而不是 `redis:7-alpine` 这种浮动 tag ✨✓
+    # 2026-10-18 的教训（同批发现）：MySQL 官方镜像 8.0.46 的 entrypoint 传了废弃参数
+    # `--skip-host-cache`，导致容器启动即崩；`redis:7-alpine` 同理 ——
+    # 上游一发新版，你的环境毫无预兆就挂 ✨✓ 而生产上你不在场 ✨✓。
+    # 钉 minor 的理由：patch 版本通常安全 ✓✓ 且能拿到安全补丁 ✓✓；
+    # 要升 minor 就先在 CI / Codespaces 里跑一次 ✓✓。
+    image: redis:7.4-alpine
     restart: unless-stopped
     command: >
       redis-server
