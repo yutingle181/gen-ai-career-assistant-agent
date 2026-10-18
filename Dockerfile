@@ -64,10 +64,19 @@ ENV PORT=8000
 # 容器级探活（compose 里也会定义一份，这里让裸 docker run 也有）。
 # 用 /healthz 而不是 /health：/health 会真实调一次 LLM + Embedding，
 # 每 30 秒烧一次 token，且模型超时会直接判定容器不健康 → 被反复重启，越探测越坏。
-# 用 CMD-SHELL 而不是 exec 形式：exec 形式不展开环境变量，
-# 而 HF Spaces 的端口是 7860（由 PORT 决定），硬编码 8000 会让探活永远失败 ✗。
+#
+# ⚠️ 为什么探活是独立脚本而不是写在 Dockerfile 里（2026-10-18 真机构建踩到 ✨✓）：
+#   Dockerfile 里**没有** `# syntax=docker/dockerfile:1` 这行时，`CMD-SHELL` 是**非法指令**，
+#   经典 builder 直接报
+#     Unknown type "CMD-SHELL" in HEALTHCHECK (try CMD)
+#   → 镜像构建失败 ✗✗
+#   而 exec 形式（CMD ["python","-c","..."])）不展开 ${PORT} ✨✓
+#   → HF Spaces 的 7860 端口探不到，探活永远失败 ✓✗
+#   用 sh -c 包一层虽能读环境变量，但引号要嵌四层（JSON + shell + Python + URL）✨✓ 极易错 ✓✗
+#   → 所以独立成 scripts/healthcheck.py：可读、可单测、Dockerfile 里就一行 ✓✓
+COPY scripts/healthcheck.py /usr/local/bin/healthcheck.py
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD-SHELL python -c "import os,urllib.request; urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8000')+'/healthz', timeout=5); print('ok')" || exit 1
+    CMD ["python", "/usr/local/bin/healthcheck.py"]
 
 # SIGTERM 后给 30 秒收尾（SSE 长连接与在途任务需要），compose 用 stop_grace_period 对齐
 STOPSIGNAL SIGTERM
