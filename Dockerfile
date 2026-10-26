@@ -12,7 +12,7 @@
 #   生态负责跟进新 digest），依赖安装开启 --require-hashes，只接受锁文件里登记的产物。
 
 # ============ 阶段 1：构建依赖 ============
-FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9 AS builder
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704 AS builder
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -29,7 +29,7 @@ COPY requirements.txt requirements.lock.txt ./
 RUN pip install --no-cache-dir --require-hashes -r requirements.lock.txt
 
 # ============ 阶段 2：运行镜像 ============
-FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 
 LABEL org.opencontainers.image.title="GenAI Career Assistant" \
       org.opencontainers.image.description="RAG + Agent 职业助手（CPU / 无 torch）"
